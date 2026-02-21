@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -14,7 +15,32 @@ import streamlit as st
 from schema import Extraction
 
 load_dotenv()
-client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+
+
+def _get_openai_api_key() -> Tuple[str, str]:
+    key = ""
+    source = ""
+
+    try:
+        key = st.secrets.get("OPENAI_API_KEY", "")
+        if key:
+            source = "streamlit_secrets"
+    except Exception:
+        key = ""
+
+    if not key:
+        key = os.getenv("OPENAI_API_KEY", "")
+        if key:
+            source = "environment"
+
+    key = str(key or "").strip().strip('"').strip("'")
+    if not key:
+        raise RuntimeError("Missing OPENAI_API_KEY in Streamlit secrets and environment.")
+    return key, source or "unknown"
+
+
+_OPENAI_API_KEY, _OPENAI_KEY_SOURCE = _get_openai_api_key()
+client = OpenAI(api_key=_OPENAI_API_KEY)
 
 SYSTEM = """You are a precise nutritionist and health data extractor.
 Extract structured health/life tracking data from journal entries.
@@ -446,7 +472,9 @@ Journal entry date (local): {date}
                 continue
 
     detail = " || ".join(error_log[-6:])
-    raise RuntimeError(f"OpenAI extraction request failed after retries. {detail}") from last_exc
+    raise RuntimeError(
+        f"OpenAI extraction request failed after retries (key_source={_OPENAI_KEY_SOURCE}). {detail}"
+    ) from last_exc
 
 
 def extract(entry: str, date: str) -> Extraction:
