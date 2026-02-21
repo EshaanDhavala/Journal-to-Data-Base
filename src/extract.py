@@ -221,6 +221,24 @@ KNOWN_FOODS = [
         "cal": 250,
         "protein": 14,
     },
+    {
+        "known_name": "taco_bell_cheesy_gordita_crunch",
+        "patterns": [r"\bcheesy\s+gordita\s+crunch\b"],
+        "cal": 470,
+        "protein": 18,
+    },
+    {
+        "known_name": "taco_bell_spicy_potato_soft_taco",
+        "patterns": [r"\bspicy\s+potato\s+soft\s+taco\b"],
+        "cal": 240,
+        "protein": 5,
+    },
+    {
+        "known_name": "taco_bell_cheesy_fiesta_potatoes",
+        "patterns": [r"\bcheesy\s+fiesta\s+potatoes\b"],
+        "cal": 240,
+        "protein": 3,
+    },
 ]
 
 
