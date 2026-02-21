@@ -15,6 +15,15 @@ class Signal(BaseModel):
     confidence: float = 0.7
 
 
+class FoodItem(BaseModel):
+    name: str
+    quantity_text: str = ""
+    calories: Optional[int] = None
+    protein_g: Optional[int] = None
+    confidence: float = 0.7
+    source: str = "model_estimate"
+
+
 class Extraction(BaseModel):
     # Core
     date: Optional[str] = None
@@ -38,7 +47,8 @@ class Extraction(BaseModel):
     study_hours: Optional[float] = None
     weight: Optional[float] = None
 
-    # Nutrition (computed)
+    # Nutrition
+    foods: List[FoodItem] = Field(default_factory=list)
     calories_est: Optional[int] = None
     protein_est: Optional[int] = None
 

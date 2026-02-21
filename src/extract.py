@@ -1,7 +1,6 @@
 # src/extract.py
 from __future__ import annotations
 
-import os
 import json
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -16,12 +15,15 @@ from schema import Extraction
 load_dotenv()
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-SYSTEM = """You extract structured health/life tracking data from journal entries.
+SYSTEM = """You are a precise nutritionist and health data extractor.
+Extract structured health/life tracking data from journal entries.
 Return ONLY valid JSON (no markdown, no extra text).
 
-Nutrition MUST be represented as an itemized list of foods/drinks with calories and protein for each item.
-Do not reuse the same calories/protein numbers across many items unless it is truly the same food/portion.
-For ambiguous portions (e.g., "some", "few pieces", "40% of a family sized bag"), estimate conservatively but include macros.
+NUTRITION ACCURACY: Use USDA/standard nutritional data as your reference.
+- Never assign identical calories AND protein to different, distinct food items.
+- Each food item's macros must reflect its specific type and portion size.
+- When a brand is mentioned, use that brand's actual nutrition label values.
+- Be conservative but realistic — do not undercount by more than 10%.
 
 signals must be a JSON array of objects with keys: key, value, unit, source, confidence (0..1).
 """
@@ -48,9 +50,9 @@ Top-level fields:
 Nutrition fields:
 - foods: an array of food/drink items. Each item:
   - name (string)
-  - quantity_text (string)
-  - calories (int) for THIS portion
-  - protein_g (int) for THIS portion
+  - quantity_text (string, e.g., "2 slices", "6 oz", "1 cup")
+  - calories (int) for THIS specific portion
+  - protein_g (int) for THIS specific portion
   - confidence (0..1)
 
 - calories_est (int or null)  (optional; will be recomputed in code)
@@ -58,13 +60,69 @@ Nutrition fields:
 
 - signals: list of objects like {"key":"...", "value":"...", "unit":"", "source":"journal", "confidence":0.0-1.0}
 
+NUTRITION REFERENCE VALUES — use these as anchors for estimation:
+
+Proteins:
+  chicken breast 6oz ≈ 280cal/52g | chicken breast 4oz ≈ 190cal/35g
+  egg large ≈ 70cal/6g | egg whites 3 ≈ 50cal/11g
+  Greek yogurt 6oz ≈ 100cal/17g | cottage cheese 1/2cup ≈ 110cal/13g
+  canned tuna 3oz ≈ 100cal/22g | salmon 6oz ≈ 350cal/34g
+  ground beef 4oz 80/20 ≈ 290cal/20g | ground beef 4oz 93/7 ≈ 190cal/23g
+  steak 6oz ≈ 350cal/44g | turkey breast 4oz ≈ 150cal/28g
+  shrimp 4oz ≈ 120cal/23g | tofu firm 4oz ≈ 90cal/10g
+
+Grains/Starches:
+  cooked white rice 1cup ≈ 200cal/4g | cooked brown rice 1cup ≈ 215cal/5g
+  cooked pasta 1cup ≈ 220cal/8g | bread slice ≈ 80cal/3g
+  oats 1/2cup dry ≈ 150cal/5g | bagel plain ≈ 270cal/10g
+  tortilla 10" flour ≈ 200cal/5g | sweet potato medium ≈ 115cal/2g
+  white potato medium ≈ 160cal/4g
+
+Dairy:
+  whole milk 1cup ≈ 150cal/8g | 2% milk 1cup ≈ 125cal/8g
+  cheddar cheese 1oz ≈ 110cal/7g | mozzarella 1oz ≈ 85cal/6g
+
+Fats/Nuts:
+  avocado 1/2 ≈ 120cal/2g | almonds 1oz ≈ 165cal/6g
+  peanut butter 2tbsp ≈ 190cal/8g | olive oil 1tbsp ≈ 120cal/0g
+  butter 1tbsp ≈ 100cal/0g
+
+Vegetables:
+  leafy greens 2cups ≈ 20cal/2g | broccoli 1cup ≈ 55cal/4g
+  mixed veggies 1cup ≈ 50cal/3g
+
+Fruits:
+  banana medium ≈ 105cal/1g | apple medium ≈ 95cal/0g
+  berries 1cup ≈ 65cal/1g | orange medium ≈ 65cal/1g
+
+Beverages:
+  whole milk 1cup ≈ 150cal/8g | orange juice 1cup ≈ 110cal/2g
+  sports drink 20oz ≈ 130cal/0g | coffee black ≈ 5cal/0g
+
+Restaurants (typical portions):
+  burger + fries ≈ 950-1100cal/40-50g | pizza slice cheese ≈ 280cal/12g
+  pizza slice with toppings ≈ 320-380cal/16-20g
+  burrito (Chipotle-style) ≈ 750-900cal/40-55g
+  pasta entrée ≈ 650-950cal/25-35g | sushi roll ≈ 300-380cal/12-18g
+  sandwich/sub 6" ≈ 400-550cal/25-35g | salad with protein ≈ 400-600cal/30-45g
+  stir fry with rice ≈ 500-700cal/25-35g
+
+PORTION ESTIMATION RULES:
+- "a serving" = standard serving size per package or label
+- "a handful" = ~1oz nuts / ~1cup leafy greens / ~0.5cup grains
+- "some" or "a bit" = 1/4 to 1/3 of a typical serving
+- "a lot" or "a ton" = 1.5–2x typical serving
+- "half" = exactly 0.5x the reference value
+- Restaurant portions ≈ 1.5x home cooking portions
+- "X% of a bag/box" = multiply total package nutrition by X%
+
 Rules:
-- If food is mentioned, foods must include it and calories/protein must be integers (not null).
-- Use conservative typical estimates when exact nutrition is unknown.
-- Do not reuse the same calories/protein pair across many different foods unless they are identical.
+- If food is mentioned, foods must include it with integer calories and protein (not null).
+- Do NOT reuse the same (calories, protein) pair across multiple different food items.
+- If unsure of exact portion, state it in quantity_text and estimate conservatively.
 """
 
-# Small set of known items (OPTIONAL but helpful). Only applied when the FOOD NAME matches.
+# Known foods with verified nutrition data
 KNOWN_FOODS = [
     {
         "known_name": "cafe_1919_personal_goat_cheese_sundried_tomato_pizza",
@@ -87,6 +145,54 @@ KNOWN_FOODS = [
         "patterns": [r"\bcore\s*power\b", r"\bfair\s*life\b", r"\bfairlife\b"],
         "cal": 230,
         "protein": 42,
+    },
+    {
+        "known_name": "quest_protein_bar",
+        "patterns": [r"\bquest\s+bar\b", r"\bquest\s+protein\s+bar\b"],
+        "cal": 190,
+        "protein": 21,
+    },
+    {
+        "known_name": "premier_protein_shake",
+        "patterns": [r"\bpremier\s+protein\b", r"\bpremier\s+shake\b"],
+        "cal": 160,
+        "protein": 30,
+    },
+    {
+        "known_name": "rxbar",
+        "patterns": [r"\brx\s*bar\b", r"\brxbar\b"],
+        "cal": 210,
+        "protein": 12,
+    },
+    {
+        "known_name": "chobani_plain_greek_yogurt_nonfat",
+        "patterns": [r"\bchobani\b.*\bgreek\b", r"\bchobani\b.*\byogurt\b"],
+        "cal": 90,
+        "protein": 17,
+    },
+    {
+        "known_name": "oikos_pro_greek_yogurt",
+        "patterns": [r"\boikos\s+pro\b", r"\boikos\b.*\byogurt\b"],
+        "cal": 130,
+        "protein": 20,
+    },
+    {
+        "known_name": "isopure_zero_carb_protein_shake",
+        "patterns": [r"\bisopure\b"],
+        "cal": 160,
+        "protein": 40,
+    },
+    {
+        "known_name": "muscle_milk_pro_series",
+        "patterns": [r"\bmuscle\s+milk\b"],
+        "cal": 280,
+        "protein": 40,
+    },
+    {
+        "known_name": "kodiak_cakes_protein_waffle",
+        "patterns": [r"\bkodiak\b.*\bwaffle\b", r"\bkodiak\b.*\bpancake\b"],
+        "cal": 250,
+        "protein": 14,
     },
 ]
 
@@ -145,7 +251,7 @@ def normalize_foods(raw_foods: Any) -> List[Dict[str, Any]]:
 
 def match_known_food_by_name(food_name: str) -> Optional[Dict[str, Any]]:
     """
-    IMPORTANT: Match ONLY on the food item's name (NOT the full entry text),
+    Match ONLY on the food item's name (NOT the full entry text),
     to avoid overriding everything just because one known item is present.
     """
     fname = (food_name or "").lower()
@@ -165,7 +271,7 @@ def apply_known_overrides(foods: List[Dict[str, Any]], raw: Dict[str, Any]) -> L
             model_cal = f.get("calories")
             model_pro = f.get("protein_g")
 
-            # Override only if missing or far off
+            # Override if missing or significantly off
             should_override = (
                 model_cal is None
                 or model_pro is None
@@ -177,7 +283,7 @@ def apply_known_overrides(foods: List[Dict[str, Any]], raw: Dict[str, Any]) -> L
                 f2 = dict(f)
                 f2["calories"] = int(known["calories"])
                 f2["protein_g"] = int(known["protein_g"])
-                f2["confidence"] = max(float(f.get("confidence", 0.7)), 0.85)
+                f2["confidence"] = max(float(f.get("confidence", 0.7)), 0.95)
                 f2["source"] = "known_food"
                 f2["matched_known"] = known["known_name"]
                 overridden.append(known["known_name"])
@@ -196,7 +302,7 @@ def apply_known_overrides(foods: List[Dict[str, Any]], raw: Dict[str, Any]) -> L
                 "value": "Overrode macros for: " + ", ".join(sorted(set(overridden))),
                 "unit": "",
                 "source": "heuristic",
-                "confidence": 0.9,
+                "confidence": 0.95,
             }
         )
     return final
@@ -246,12 +352,12 @@ Journal entry date (local): {date}
 {extra_rules}
 """
     resp = client.chat.completions.create(
-        model="gpt-4.1-mini",
+        model="gpt-4.1",
         messages=[
             {"role": "system", "content": SYSTEM},
             {"role": "user", "content": msg},
         ],
-        temperature=0.2,
+        temperature=0.1,
         response_format={"type": "json_object"},
     )
     return json.loads(resp.choices[0].message.content)
@@ -285,7 +391,9 @@ def extract(entry: str, date: str) -> Extraction:
         raw2 = call_gpt(
             entry,
             date,
-            extra_rules="STRICT: Do NOT reuse the same calories/protein across different foods unless identical. Use the portion description to vary estimates conservatively.",
+            extra_rules="CRITICAL: Every food item must have UNIQUE (calories, protein) values. "
+            "Different foods cannot share identical macros. "
+            "Re-read each food item and assign accurate, distinct nutrition values based on type and portion.",
         )
         raw2["date"] = date
 
@@ -344,7 +452,7 @@ def extract(entry: str, date: str) -> Extraction:
         raw["signals"].append(
             {
                 "key": "macro_totals_computed",
-                "value": f"Summed {counted} food items to compute totals.",
+                "value": f"Summed {counted} food items: {total_cal} cal, {total_pro}g protein.",
                 "unit": "",
                 "source": "code",
                 "confidence": 0.95,
