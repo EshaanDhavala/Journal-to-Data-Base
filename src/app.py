@@ -655,7 +655,7 @@ with tab_dash:
         with s3:
             st.markdown(_streak_card("💤", "Sleep ≥7h", sleep_s), unsafe_allow_html=True)
         with s4:
-            st.markdown(_streak_card("🥩", "Protein ≥140g", prot_s), unsafe_allow_html=True)
+            st.markdown(_streak_card("🥩", "Protein ≥100g", prot_s), unsafe_allow_html=True)
 
         st.markdown("---")
 
