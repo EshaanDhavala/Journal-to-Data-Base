@@ -532,10 +532,30 @@ def _cached_drive_photos(_svc: str) -> list:
     return _list_drive_photos(_svc)
 
 
-def _generate_timelapse_from_photos(photos: list) -> bytes | None:
+@st.cache_data(ttl=300)
+def _fetch_drive_image_bytes(_svc: str, file_id: str) -> bytes | None:
     """
-    Download each photo and compile into an animated GIF (600ms/frame).
-    Returns raw GIF bytes, or None if no frames could be loaded.
+    Authenticated download of a single Drive file as raw bytes.
+    Cached for 5 minutes so the same photo isn't re-fetched on every rerun.
+    """
+    try:
+        token = _get_drive_token(_svc)
+        resp = _requests.get(
+            f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=20,
+        )
+        resp.raise_for_status()
+        return resp.content
+    except Exception:
+        return None
+
+
+def _generate_timelapse_from_photos(photos: list, svc_json: str) -> bytes | None:
+    """
+    Download each photo via authenticated Drive API and compile into an
+    animated GIF (600ms/frame). Returns raw GIF bytes, or None if no frames
+    could be loaded.
     """
     from PIL import Image
     from PIL.Image import Resampling
@@ -544,9 +564,10 @@ def _generate_timelapse_from_photos(photos: list) -> bytes | None:
     frames = []
     for p in photos:
         try:
-            resp = _requests.get(p["url"], timeout=15)
-            resp.raise_for_status()
-            img = Image.open(_io.BytesIO(resp.content)).convert("RGB")
+            img_bytes = _fetch_drive_image_bytes(svc_json, p["file_id"])
+            if not img_bytes:
+                continue
+            img = Image.open(_io.BytesIO(img_bytes)).convert("RGB")
             img = img.resize((480, 480), Resampling.LANCZOS)
             frames.append(img)
         except Exception:
@@ -766,7 +787,7 @@ with tab_log:
             captured = st.session_state.get("daily_photo")
             if captured is not None:
                 try:
-                    with st.spinner("Uploading photo…"):
+                    with st.spinner("Uploading photo to Google Drive…"):
                         photo_url = _upload_photo_to_drive(
                             _service_json, captured.getvalue(), daily_row["date"]
                         )
@@ -774,8 +795,13 @@ with tab_log:
                     # Store as a HYPERLINK formula so the cell is a labeled
                     # clickable link in Google Sheets ("📷 View Photo")
                     daily_row["photo_url"] = f'=HYPERLINK("{photo_url}", "📷 View Photo")'
+                    st.toast("Photo uploaded!", icon="📸")
                 except Exception as photo_err:
-                    st.warning(f"Photo upload failed (entry will still save): {photo_err}")
+                    import traceback
+                    st.error(
+                        f"**Photo upload failed** (entry will still save).\n\n"
+                        f"```\n{traceback.format_exc()}\n```"
+                    )
 
             upsert_daily_row(daily_ws, daily_row)
             append_signals(signals_ws, validated["date"], validated.get("signals", []))
@@ -875,7 +901,11 @@ with tab_dash:
             ph_col, tl_col = st.columns([1, 2])
             with ph_col:
                 st.caption(f"Latest — {latest_p['date']}")
-                st.image(latest_p["url"], use_column_width=True)
+                latest_bytes = _fetch_drive_image_bytes(_service_json, latest_p["file_id"])
+                if latest_bytes:
+                    st.image(latest_bytes, use_column_width=True)
+                else:
+                    st.warning("Could not load latest photo.")
             with tl_col:
                 st.caption(
                     f"{n_photos} photo{'s' if n_photos != 1 else ''} logged · "
@@ -883,7 +913,7 @@ with tab_dash:
                 )
                 if st.button("🎬 Generate Timelapse", key="timelapse_btn"):
                     with st.spinner(f"Downloading {n_photos} photo{'s' if n_photos != 1 else ''} and building GIF…"):
-                        gif = _generate_timelapse_from_photos(drive_photos)
+                        gif = _generate_timelapse_from_photos(drive_photos, _service_json)
                     if gif:
                         st.session_state["timelapse_gif"] = gif
                     else:
