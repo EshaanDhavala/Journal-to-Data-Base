@@ -1,5 +1,5 @@
 import gspread
-from google.oauth2.service_account import Credentials
+from google.oauth2.service_account import Credentials  # noqa: F401
 
 def get_client(service_account_json_str: str):
     import json
