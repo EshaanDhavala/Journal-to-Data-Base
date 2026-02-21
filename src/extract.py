@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
 from openai import OpenAI
+from openai import APIStatusError, APIConnectionError, RateLimitError, AuthenticationError
 
 import streamlit as st
 
