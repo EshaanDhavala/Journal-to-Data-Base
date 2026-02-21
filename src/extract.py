@@ -400,6 +400,7 @@ Journal entry date (local): {date}
     secret_model = st.secrets.get("OPENAI_MODEL", None)
     models = [m for m in [secret_model, "gpt-4.1-mini", "gpt-4o-mini"] if m]
     error_log: List[str] = []
+    last_exc: Optional[Exception] = None
 
     for model in models:
         # 1) Try responses API (newer/unified).
@@ -415,6 +416,7 @@ Journal entry date (local): {date}
             if isinstance(out, str) and out.strip():
                 return _parse_json_object(out)
         except Exception as e:
+            last_exc = e
             error_log.append(f"responses:{model} -> {_openai_error_text(e)}")
 
         req = dict(
@@ -438,14 +440,13 @@ Journal entry date (local): {date}
                     resp = client.chat.completions.create(**req)
                 return _parse_json_object(resp.choices[0].message.content or "")
             except Exception as e:
+                last_exc = e
                 mode = "json_mode" if use_json_mode else "plain"
                 error_log.append(f"chat:{model}:{mode} -> {_openai_error_text(e)}")
                 continue
 
-    raise RuntimeError(
-        "OpenAI extraction request failed after retries. "
-        + " || ".join(error_log[-6:])
-    )
+    detail = " || ".join(error_log[-6:])
+    raise RuntimeError(f"OpenAI extraction request failed after retries. {detail}") from last_exc
 
 
 def extract(entry: str, date: str) -> Extraction:

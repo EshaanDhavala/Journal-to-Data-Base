@@ -287,10 +287,13 @@ with tab_log:
             st.error("Paste a journal entry first.")
         else:
             with st.spinner("Extracting with AI…"):
-                result = extract(entry=entry, date=str(d))
-                st.session_state.pending_data = result.model_dump()
-                st.session_state.pending_entry = entry
-                st.session_state.pending_date = str(d)
+                try:
+                    result = extract(entry=entry, date=str(d))
+                    st.session_state.pending_data = result.model_dump()
+                    st.session_state.pending_entry = entry
+                    st.session_state.pending_date = str(d)
+                except Exception as e:
+                    st.error(f"Extraction failed: {e}")
 
     if reset_clicked:
         for _k in ("pending_data", "pending_entry", "pending_date"):
