@@ -33,7 +33,7 @@ def upsert_daily_row(sheet, row_dict: dict):
 
     if date in col_vals:
         idx = col_vals.index(date) + 1
-        sheet.update(f"A{idx}:{chr(64+len(headers))}{idx}", [values])
+        sheet.update(f"A{idx}:{chr(64+len(headers))}{idx}", [values], value_input_option="USER_ENTERED")
     else:
         sheet.append_row(values, value_input_option="USER_ENTERED")
 

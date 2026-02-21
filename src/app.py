@@ -481,10 +481,96 @@ def _upload_photo_to_drive(service_json_str: str, img_bytes: bytes, date_str: st
     return f"https://drive.google.com/uc?id={file_id}&export=view"
 
 
+def _list_drive_photos(service_json_str: str) -> list:
+    """
+    Return [{date, file_id, url}] sorted ascending by date for every photo
+    in the 'Journal Photos' Drive folder.
+    """
+    token = _get_drive_token(service_json_str)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    resp = _requests.get(
+        "https://www.googleapis.com/drive/v3/files",
+        headers=headers,
+        params={
+            "q": (
+                f"name='{_DRIVE_FOLDER_NAME}' "
+                "and mimeType='application/vnd.google-apps.folder' "
+                "and trashed=false"
+            ),
+            "fields": "files(id)",
+        },
+    )
+    folders = resp.json().get("files", [])
+    if not folders:
+        return []
+    folder_id = folders[0]["id"]
+
+    resp = _requests.get(
+        "https://www.googleapis.com/drive/v3/files",
+        headers=headers,
+        params={
+            "q": f"'{folder_id}' in parents and mimeType='image/jpeg' and trashed=false",
+            "fields": "files(id,name)",
+            "orderBy": "name",
+            "pageSize": 1000,
+        },
+    )
+    return [
+        {
+            "date": f["name"].replace(".jpg", ""),
+            "file_id": f["id"],
+            "url": f"https://drive.google.com/uc?id={f['id']}&export=view",
+        }
+        for f in resp.json().get("files", [])
+    ]
+
+
+@st.cache_data(ttl=300)
+def _cached_drive_photos(_svc: str) -> list:
+    """Cached wrapper around _list_drive_photos (5-min TTL)."""
+    return _list_drive_photos(_svc)
+
+
+def _generate_timelapse_from_photos(photos: list) -> bytes | None:
+    """
+    Download each photo and compile into an animated GIF (600ms/frame).
+    Returns raw GIF bytes, or None if no frames could be loaded.
+    """
+    from PIL import Image
+    from PIL.Image import Resampling
+    import io as _io
+
+    frames = []
+    for p in photos:
+        try:
+            resp = _requests.get(p["url"], timeout=15)
+            resp.raise_for_status()
+            img = Image.open(_io.BytesIO(resp.content)).convert("RGB")
+            img = img.resize((480, 480), Resampling.LANCZOS)
+            frames.append(img)
+        except Exception:
+            continue
+
+    if not frames:
+        return None
+
+    output = _io.BytesIO()
+    frames[0].save(
+        output,
+        format="GIF",
+        save_all=True,
+        append_images=frames[1:],
+        duration=600,   # 0.6s per frame
+        loop=0,
+    )
+    return output.getvalue()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Session state
 # ─────────────────────────────────────────────────────────────────────────────
-for _k in ("pending_data", "pending_entry", "pending_date", "weekly_review_text", "nl_answers"):
+for _k in ("pending_data", "pending_entry", "pending_date", "weekly_review_text", "nl_answers", "timelapse_gif"):
     if _k not in st.session_state:
         st.session_state[_k] = None
 if st.session_state.nl_answers is None:
@@ -685,7 +771,9 @@ with tab_log:
                             _service_json, captured.getvalue(), daily_row["date"]
                         )
                     ensure_column(daily_ws, "photo_url")
-                    daily_row["photo_url"] = photo_url
+                    # Store as a HYPERLINK formula so the cell is a labeled
+                    # clickable link in Google Sheets ("📷 View Photo")
+                    daily_row["photo_url"] = f'=HYPERLINK("{photo_url}", "📷 View Photo")'
                 except Exception as photo_err:
                     st.warning(f"Photo upload failed (entry will still save): {photo_err}")
 
@@ -775,15 +863,33 @@ with tab_dash:
         with s4:
             st.markdown(_streak_card("🥩", "Protein ≥100g", prot_s), unsafe_allow_html=True)
 
-        # ── Latest photo ──────────────────────────────────────────────────
-        if "photo_url" in df_all.columns:
-            latest_photo = latest.get("photo_url")
-            if latest_photo and pd.notna(latest_photo) and str(latest_photo).startswith("http"):
-                st.markdown("")
-                photo_col, _ = st.columns([1, 3])
-                with photo_col:
-                    st.markdown("**📸 Latest photo**")
-                    st.image(str(latest_photo), use_column_width=True)
+        # ── Daily Photos & Timelapse ──────────────────────────────────────
+        st.markdown("---")
+        st.markdown("### 📸 Daily Photos")
+        drive_photos = _cached_drive_photos(_service_json)
+        if not drive_photos:
+            st.caption("No photos taken yet. Snap a selfie when logging your next entry.")
+        else:
+            n_photos = len(drive_photos)
+            latest_p = drive_photos[-1]
+            ph_col, tl_col = st.columns([1, 2])
+            with ph_col:
+                st.caption(f"Latest — {latest_p['date']}")
+                st.image(latest_p["url"], use_column_width=True)
+            with tl_col:
+                st.caption(
+                    f"{n_photos} photo{'s' if n_photos != 1 else ''} logged · "
+                    "GIF plays all photos in order, 0.6s/frame"
+                )
+                if st.button("🎬 Generate Timelapse", key="timelapse_btn"):
+                    with st.spinner(f"Downloading {n_photos} photo{'s' if n_photos != 1 else ''} and building GIF…"):
+                        gif = _generate_timelapse_from_photos(drive_photos)
+                    if gif:
+                        st.session_state["timelapse_gif"] = gif
+                    else:
+                        st.warning("Could not build timelapse — photos may not have loaded.")
+                if st.session_state.get("timelapse_gif"):
+                    st.image(st.session_state["timelapse_gif"], width=420)
 
         st.markdown("---")
 
