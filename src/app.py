@@ -11,7 +11,7 @@ import streamlit as st
 
 from extract import extract, client as openai_client
 from schema import Extraction
-from sheets import get_client, upsert_daily_row, append_signals
+from sheets import get_client, upsert_daily_row, append_signals, ensure_column
 from validate import get_missing_questions, FIELD_TYPES
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -384,6 +384,104 @@ def _build_metrics_context(df: pd.DataFrame, max_rows: int = 90) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Google Drive photo helpers
+# ─────────────────────────────────────────────────────────────────────────────
+import requests as _requests
+from google.oauth2.service_account import Credentials as _SACredentials
+from google.auth.transport.requests import Request as _GARequest
+
+_DRIVE_FOLDER_NAME = "Journal Photos"
+
+
+def _get_drive_token(service_json_str: str) -> str:
+    """Return a fresh OAuth2 bearer token scoped for Drive."""
+    info = json.loads(service_json_str)
+    creds = _SACredentials.from_service_account_info(
+        info, scopes=["https://www.googleapis.com/auth/drive"]
+    )
+    creds.refresh(_GARequest())
+    return creds.token
+
+
+def _drive_get_or_create_folder(token: str, folder_name: str) -> str:
+    """Return the Drive folder ID for folder_name, creating it if needed."""
+    headers = {"Authorization": f"Bearer {token}"}
+    resp = _requests.get(
+        "https://www.googleapis.com/drive/v3/files",
+        headers=headers,
+        params={
+            "q": (
+                f"name='{folder_name}' "
+                "and mimeType='application/vnd.google-apps.folder' "
+                "and trashed=false"
+            ),
+            "fields": "files(id)",
+        },
+    )
+    files = resp.json().get("files", [])
+    if files:
+        return files[0]["id"]
+    resp = _requests.post(
+        "https://www.googleapis.com/drive/v3/files",
+        headers=headers,
+        json={"name": folder_name, "mimeType": "application/vnd.google-apps.folder"},
+    )
+    return resp.json()["id"]
+
+
+def _upload_photo_to_drive(service_json_str: str, img_bytes: bytes, date_str: str) -> str:
+    """
+    Upload img_bytes as {date_str}.jpg into the 'Journal Photos' Drive folder.
+    Makes the file publicly viewable and returns a direct image URL.
+    """
+    token = _get_drive_token(service_json_str)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    folder_id = _drive_get_or_create_folder(token, _DRIVE_FOLDER_NAME)
+    filename = f"{date_str}.jpg"
+
+    # Delete any existing photo for this date
+    resp = _requests.get(
+        "https://www.googleapis.com/drive/v3/files",
+        headers=headers,
+        params={
+            "q": f"name='{filename}' and '{folder_id}' in parents and trashed=false",
+            "fields": "files(id)",
+        },
+    )
+    for f in resp.json().get("files", []):
+        _requests.delete(
+            f"https://www.googleapis.com/drive/v3/files/{f['id']}",
+            headers=headers,
+        )
+
+    # Multipart upload (metadata + binary)
+    boundary = "===journal_photo_boundary==="
+    body = (
+        f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"
+        f'{json.dumps({"name": filename, "parents": [folder_id]})}\r\n'
+        f"--{boundary}\r\nContent-Type: image/jpeg\r\n\r\n"
+    ).encode() + img_bytes + f"\r\n--{boundary}--".encode()
+
+    resp = _requests.post(
+        "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
+        headers={**headers, "Content-Type": f"multipart/related; boundary={boundary}"},
+        data=body,
+    )
+    resp.raise_for_status()
+    file_id = resp.json()["id"]
+
+    # Make publicly viewable
+    _requests.post(
+        f"https://www.googleapis.com/drive/v3/files/{file_id}/permissions",
+        headers=headers,
+        json={"role": "reader", "type": "anyone"},
+    )
+
+    return f"https://drive.google.com/uc?id={file_id}&export=view"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Session state
 # ─────────────────────────────────────────────────────────────────────────────
 for _k in ("pending_data", "pending_entry", "pending_date", "weekly_review_text", "nl_answers"):
@@ -535,6 +633,12 @@ with tab_log:
                     else:
                         answers_raw[field] = st.text_input(q, value="", key=f"ask_{field}")
 
+        # ── Daily photo ───────────────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("#### 📸 Daily Photo")
+        st.caption("Optional — snap a quick selfie to log alongside today's entry.")
+        photo_img = st.camera_input("Take photo", key="daily_photo", label_visibility="collapsed")
+
         # ── Save ─────────────────────────────────────────────────────────
         st.markdown("---")
         if st.button("💾  Confirm & Save", type="primary", use_container_width=True):
@@ -571,6 +675,20 @@ with tab_log:
 
             daily_row = dict(validated)
             daily_row["full_entry"] = st.session_state.pending_entry or ""
+
+            # Upload photo if one was taken
+            captured = st.session_state.get("daily_photo")
+            if captured is not None:
+                try:
+                    with st.spinner("Uploading photo…"):
+                        photo_url = _upload_photo_to_drive(
+                            _service_json, captured.getvalue(), daily_row["date"]
+                        )
+                    ensure_column(daily_ws, "photo_url")
+                    daily_row["photo_url"] = photo_url
+                except Exception as photo_err:
+                    st.warning(f"Photo upload failed (entry will still save): {photo_err}")
+
             upsert_daily_row(daily_ws, daily_row)
             append_signals(signals_ws, validated["date"], validated.get("signals", []))
 
@@ -656,6 +774,16 @@ with tab_dash:
             st.markdown(_streak_card("💤", "Sleep ≥7h", sleep_s), unsafe_allow_html=True)
         with s4:
             st.markdown(_streak_card("🥩", "Protein ≥100g", prot_s), unsafe_allow_html=True)
+
+        # ── Latest photo ──────────────────────────────────────────────────
+        if "photo_url" in df_all.columns:
+            latest_photo = latest.get("photo_url")
+            if latest_photo and pd.notna(latest_photo) and str(latest_photo).startswith("http"):
+                st.markdown("")
+                photo_col, _ = st.columns([1, 3])
+                with photo_col:
+                    st.markdown("**📸 Latest photo**")
+                    st.image(str(latest_photo), use_column_width=True)
 
         st.markdown("---")
 

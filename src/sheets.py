@@ -38,6 +38,13 @@ def upsert_daily_row(sheet, row_dict: dict):
         sheet.append_row(values, value_input_option="USER_ENTERED")
 
 
+def ensure_column(sheet, col_name: str):
+    """Append col_name as a new header column if it doesn't already exist."""
+    headers = sheet.row_values(1)
+    if col_name not in headers:
+        sheet.update_cell(1, len(headers) + 1, col_name)
+
+
 def append_signals(sheet, date: str, signals: list):
     rows = []
     for s in signals:
