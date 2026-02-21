@@ -365,6 +365,27 @@ def _parse_json_object(text: str) -> Dict[str, Any]:
     raise ValueError("Model did not return a valid JSON object.")
 
 
+def _openai_error_text(err: Exception) -> str:
+    parts = [f"{type(err).__name__}: {err}"]
+    status = getattr(err, "status_code", None)
+    if status is not None:
+        parts.append(f"status={status}")
+
+    resp = getattr(err, "response", None)
+    if resp is not None:
+        body = None
+        try:
+            body = getattr(resp, "text", None)
+            if callable(body):
+                body = body()
+        except Exception:
+            body = None
+        if isinstance(body, str) and body.strip():
+            parts.append(f"body={body[:600]}")
+
+    return " | ".join(parts)
+
+
 def call_gpt(entry: str, date: str, extra_rules: str = "") -> Dict[str, Any]:
     msg = f"""<RAW_JOURNAL>
 {entry}
@@ -376,10 +397,26 @@ Journal entry date (local): {date}
 
 {extra_rules}
 """
-    models = ["gpt-4.1-mini", "gpt-4o-mini"]
-    last_err: Optional[Exception] = None
+    secret_model = st.secrets.get("OPENAI_MODEL", None)
+    models = [m for m in [secret_model, "gpt-4.1-mini", "gpt-4o-mini"] if m]
+    error_log: List[str] = []
 
     for model in models:
+        # 1) Try responses API (newer/unified).
+        try:
+            resp = client.responses.create(
+                model=model,
+                input=[
+                    {"role": "system", "content": SYSTEM},
+                    {"role": "user", "content": msg},
+                ],
+            )
+            out = getattr(resp, "output_text", None)
+            if isinstance(out, str) and out.strip():
+                return _parse_json_object(out)
+        except Exception as e:
+            error_log.append(f"responses:{model} -> {_openai_error_text(e)}")
+
         req = dict(
             model=model,
             messages=[
@@ -401,10 +438,14 @@ Journal entry date (local): {date}
                     resp = client.chat.completions.create(**req)
                 return _parse_json_object(resp.choices[0].message.content or "")
             except Exception as e:
-                last_err = e
+                mode = "json_mode" if use_json_mode else "plain"
+                error_log.append(f"chat:{model}:{mode} -> {_openai_error_text(e)}")
                 continue
 
-    raise RuntimeError(f"OpenAI extraction request failed after retries. Last error: {last_err}")
+    raise RuntimeError(
+        "OpenAI extraction request failed after retries. "
+        + " || ".join(error_log[-6:])
+    )
 
 
 def extract(entry: str, date: str) -> Extraction:
