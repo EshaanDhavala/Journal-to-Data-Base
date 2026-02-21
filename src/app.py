@@ -172,11 +172,8 @@ if data:
             st.stop()
 
         # Sheets config
-        service_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
-        sheet_name = os.getenv("GOOGLE_SHEET_NAME")
-        if not service_json or not sheet_name:
-            st.error("Missing GOOGLE_SERVICE_ACCOUNT_JSON or GOOGLE_SHEET_NAME in .env")
-            st.stop()
+        service_json = json.dumps(dict(st.secrets["gcp_service_account"]))
+        sheet_name = st.secrets["GOOGLE_SHEET_NAME"]
 
         # Write to Sheets
         gc = get_client(service_json)
