@@ -168,10 +168,10 @@ KNOWN_FOODS = [
         "protein": 17,
     },
     {
-        "known_name": "fairlife_core_power_shake",
+        "known_name": "fairlife_shake",
         "patterns": [r"\bcore\s*power\b", r"\bfair\s*life\b", r"\bfairlife\b"],
-        "cal": 230,
-        "protein": 42,
+        "cal": 150,
+        "protein": 30,
     },
     {
         "known_name": "quest_protein_bar",
