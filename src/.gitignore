@@ -1,5 +1,0 @@
-.env
-google_service_account.json
-__pycache__/
-*.pyc
-main.py
