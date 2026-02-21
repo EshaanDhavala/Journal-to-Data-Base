@@ -49,7 +49,7 @@ QUESTIONS: Dict[str, str] = {
 FIELD_TYPES: Dict[str, str] = {
     "wake_time": "time_hhmm",
     "sleep_hours": "float_nonneg",
-    "sleep_quality_1_10": "int_1_10",
+    "sleep_quality_1_10": "float_1_10",
     "gym": "bool",
     "workout_type": "str",
     "workout_minutes": "int_nonneg",

@@ -32,7 +32,7 @@ class Extraction(BaseModel):
     # Sleep
     wake_time: Optional[str] = None          # HH:MM
     sleep_hours: Optional[float] = None
-    sleep_quality_1_10: Optional[int] = None
+    sleep_quality_1_10: Optional[float] = None
 
     # Training
     gym: Optional[bool] = None

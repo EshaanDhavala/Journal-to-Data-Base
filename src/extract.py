@@ -61,7 +61,7 @@ Top-level fields:
 - date (YYYY-MM-DD) MUST equal the provided date
 - wake_time (string HH:MM in 24h like "07:45" or "12:30", or null)
 - sleep_hours (float or null)
-- sleep_quality_1_10 (int 1-10 or null)
+- sleep_quality_1_10 (float 1.0-10.0 or null)
 - gym (true/false or null)
 - workout_type (string like: push/pull/legs/tennis/run/rest/other or null)
 - workout_minutes (int or null)
