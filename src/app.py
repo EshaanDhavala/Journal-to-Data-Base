@@ -1,6 +1,7 @@
 # src/app.py
 from __future__ import annotations
 
+import datetime
 import json
 import re
 
@@ -8,7 +9,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from extract import extract
+from extract import extract, client as openai_client
 from schema import Extraction
 from sheets import get_client, upsert_daily_row, append_signals
 from validate import get_missing_questions, FIELD_TYPES
@@ -83,6 +84,27 @@ div[data-testid="stDataFrame"] { border-radius: 10px; overflow: hidden; }
 .vega-embed details { display: none !important; }
 .vega-embed summary { display: none !important; }
 .vega-embed .vega-actions { display: none !important; }
+
+/* Streak badges */
+.streak-card {
+    border: 1px solid rgba(128,128,128,0.18);
+    border-radius: 12px;
+    padding: 0.85rem 1rem;
+    text-align: center;
+    transition: border-color 0.18s;
+}
+.streak-card:hover { border-color: rgba(128,128,128,0.40); }
+.streak-count { font-size: 1.75rem; font-weight: 700; line-height: 1.2; }
+.streak-sub { font-size: 0.78rem; opacity: 0.60; margin-top: 0.15rem; }
+.streak-zero .streak-count { opacity: 0.35; }
+
+/* NL query chat history */
+.qa-block {
+    border-left: 3px solid rgba(128,128,128,0.25);
+    padding: 0.5rem 0.9rem;
+    margin-bottom: 0.75rem;
+    border-radius: 0 8px 8px 0;
+}
 </style>
 """,
     unsafe_allow_html=True,
@@ -247,16 +269,135 @@ def _bars(df: pd.DataFrame, y: str, title: str, color: str = "#6ca0dc", height: 
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Streak helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _is_truthy(val) -> bool:
+    """Normalize gym/creatine column values to bool."""
+    if isinstance(val, bool):
+        return val
+    return str(val).strip().lower() in ("true", "1", "yes")
+
+
+def _gym_streak(df: pd.DataFrame) -> int:
+    """
+    Gym streak where ONE consecutive rest day is allowed (Thursday is the
+    planned rest day). TWO or more consecutive rest days = streak broken.
+    Returns the number of days in the current unbroken window.
+    """
+    if "gym" not in df.columns or df.empty:
+        return 0
+    rows = df.sort_values("date", ascending=False)[["date", "gym"]]
+    streak = 0
+    consec_rest = 0
+    for _, row in rows.iterrows():
+        val = row["gym"]
+        if pd.isna(val):
+            continue
+        if _is_truthy(val):
+            streak += 1
+            consec_rest = 0
+        else:
+            consec_rest += 1
+            if consec_rest >= 2:
+                break
+            streak += 1  # single rest day stays inside the streak window
+    return streak
+
+
+def _simple_streak(df: pd.DataFrame, col: str, condition) -> int:
+    """
+    Consecutive days (most recent first) where condition(value) is True.
+    NaN rows are skipped rather than treated as failures.
+    """
+    if col not in df.columns or df.empty:
+        return 0
+    rows = df.sort_values("date", ascending=False)[["date", col]]
+    streak = 0
+    for _, row in rows.iterrows():
+        val = row[col]
+        if pd.isna(val):
+            continue
+        try:
+            if condition(val):
+                streak += 1
+            else:
+                break
+        except Exception:
+            break
+    return streak
+
+
+def _streak_card(emoji: str, label: str, count: int, sub: str = "") -> str:
+    """Return HTML for a streak badge card."""
+    zero_cls = " streak-zero" if count == 0 else ""
+    count_display = str(count) if count > 0 else "—"
+    unit = f" day{'s' if count != 1 else ''}" if count > 0 else ""
+    sub_html = f'<div class="streak-sub">{sub}</div>' if sub else ""
+    return (
+        f'<div class="streak-card{zero_cls}">'
+        f'<div style="font-size:1.5rem">{emoji}</div>'
+        f'<div style="font-size:0.85rem;font-weight:600;margin:0.2rem 0">{label}</div>'
+        f'<div class="streak-count">{count_display}{unit}</div>'
+        f'{sub_html}'
+        f'</div>'
+    )
+
+
+def _parse_foods_for_context(df: pd.DataFrame) -> str:
+    """
+    Parse the 'foods' column (JSON or Python repr string) into a human-readable
+    text log for GPT context: one line per day listing food names.
+    """
+    if "foods" not in df.columns:
+        return ""
+    lines = []
+    for _, row in df.sort_values("date", ascending=False).iterrows():
+        raw = row.get("foods")
+        if not raw or pd.isna(raw):
+            continue
+        date_str = row["date"].strftime("%Y-%m-%d") if hasattr(row["date"], "strftime") else str(row["date"])
+        items = []
+        try:
+            parsed = json.loads(str(raw))
+            if isinstance(parsed, list):
+                items = [f.get("name", "") for f in parsed if isinstance(f, dict)]
+        except (json.JSONDecodeError, TypeError):
+            # Fallback: extract quoted strings or name values via regex
+            items = re.findall(r"'name':\s*'([^']+)'|\"name\":\s*\"([^\"]+)\"", str(raw))
+            items = [a or b for a, b in items]
+        if items:
+            lines.append(f"{date_str}: {', '.join(i for i in items if i)}")
+    return "\n".join(lines)
+
+
+def _build_metrics_context(df: pd.DataFrame, max_rows: int = 90) -> str:
+    """Build a compact CSV-like text of key metrics for GPT context."""
+    cols = [c for c in [
+        "date", "calories_est", "protein_est", "sleep_hours", "sleep_quality_1_10",
+        "mood_1_10", "weight", "gym", "workout_type", "workout_minutes",
+        "water_bottles", "study_hours", "screen_time_hours", "creatine",
+    ] if c in df.columns]
+    sub = df.sort_values("date", ascending=False).head(max_rows)[cols].copy()
+    sub["date"] = sub["date"].dt.strftime("%Y-%m-%d")
+    return sub.to_csv(index=False)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Session state
 # ─────────────────────────────────────────────────────────────────────────────
-for _k in ("pending_data", "pending_entry", "pending_date"):
+for _k in ("pending_data", "pending_entry", "pending_date", "weekly_review_text", "nl_answers"):
     if _k not in st.session_state:
         st.session_state[_k] = None
+if st.session_state.nl_answers is None:
+    st.session_state.nl_answers = []
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Tabs
 # ─────────────────────────────────────────────────────────────────────────────
-tab_log, tab_dash = st.tabs(["Log Entry", "Dashboard"])
+tab_log, tab_dash, tab_review, tab_ask = st.tabs(
+    ["Log Entry", "Dashboard", "Weekly Review", "Ask Your Data"]
+)
 
 # ═════════════════════════════════════════════════════════════════════════════
 # LOG ENTRY TAB
@@ -499,6 +640,23 @@ with tab_dash:
             delta=_delta(latest, prev, "mood_1_10"),
         )
 
+        # ── Streaks ───────────────────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("### 🔥 Streaks")
+        s1, s2, s3, s4 = st.columns(4)
+        gym_s = _gym_streak(df_all)
+        cre_s = _simple_streak(df_all, "creatine", _is_truthy)
+        sleep_s = _simple_streak(df_all, "sleep_hours", lambda v: float(v) >= 8)
+        prot_s = _simple_streak(df_all, "protein_est", lambda v: float(v) >= 100)
+        with s1:
+            st.markdown(_streak_card("🏋️", "Gym", gym_s, "≤1 rest/row allowed"), unsafe_allow_html=True)
+        with s2:
+            st.markdown(_streak_card("💊", "Creatine", cre_s), unsafe_allow_html=True)
+        with s3:
+            st.markdown(_streak_card("💤", "Sleep ≥7h", sleep_s), unsafe_allow_html=True)
+        with s4:
+            st.markdown(_streak_card("🥩", "Protein ≥140g", prot_s), unsafe_allow_html=True)
+
         st.markdown("---")
 
         # ── Nutrition ─────────────────────────────────────────────────────
@@ -610,3 +768,235 @@ with tab_dash:
         if st.button("↺  Refresh Data"):
             load_sheet_data.clear()
             st.rerun()
+
+# ═════════════════════════════════════════════════════════════════════════════
+# WEEKLY REVIEW TAB
+# ═════════════════════════════════════════════════════════════════════════════
+with tab_review:
+    st.markdown("## Weekly Review")
+    st.caption("GPT-generated narrative summary of your last 7 days.")
+
+    try:
+        gc_review = get_client(_service_json)
+        df_rev_all = load_sheet_data(gc_review, _sheet_name)
+    except Exception as e:
+        st.error(f"Could not load sheet data: {e}")
+        df_rev_all = pd.DataFrame()
+
+    if df_rev_all.empty:
+        st.info("No data yet. Log some entries first.")
+    else:
+        today_dt = datetime.date.today()
+        default_start = today_dt - datetime.timedelta(days=6)
+
+        wc1, wc2, _ = st.columns([1, 1, 2])
+        with wc1:
+            week_start = st.date_input("Week start", value=default_start, key="review_start")
+        with wc2:
+            week_end = st.date_input("Week end", value=today_dt, key="review_end")
+
+        gen_btn = st.button("Generate Review", type="primary")
+
+        if gen_btn:
+            # Clear cached review when user explicitly regenerates
+            st.session_state.weekly_review_text = None
+
+        if gen_btn or (st.session_state.weekly_review_text is None and not gen_btn):
+            # Only auto-generate if there's no cached review (first load)
+            pass
+
+        if gen_btn:
+            ws_dt = pd.Timestamp(week_start)
+            we_dt = pd.Timestamp(week_end)
+            week_df = df_rev_all[
+                (df_rev_all["date"] >= ws_dt) & (df_rev_all["date"] <= we_dt)
+            ].copy()
+
+            if week_df.empty:
+                st.warning("No entries found for that date range.")
+            else:
+                def _safe_avg(col):
+                    if col in week_df.columns:
+                        s = pd.to_numeric(week_df[col], errors="coerce").dropna()
+                        return round(s.mean(), 1) if not s.empty else "n/a"
+                    return "n/a"
+
+                gym_days = 0
+                if "gym" in week_df.columns:
+                    gym_days = int(week_df["gym"].apply(
+                        lambda v: 1 if _is_truthy(v) else 0
+                    ).sum())
+
+                workout_types = ""
+                if "workout_type" in week_df.columns:
+                    wt = week_df["workout_type"].dropna().tolist()
+                    workout_types = ", ".join(wt) if wt else "none"
+
+                creatine_days = 0
+                if "creatine" in week_df.columns:
+                    creatine_days = int(week_df["creatine"].apply(
+                        lambda v: 1 if _is_truthy(v) else 0
+                    ).sum())
+
+                best_mood_row = None
+                worst_mood_row = None
+                if "mood_1_10" in week_df.columns:
+                    mood_col = pd.to_numeric(week_df["mood_1_10"], errors="coerce")
+                    if not mood_col.dropna().empty:
+                        best_mood_row = week_df.loc[mood_col.idxmax()]
+                        worst_mood_row = week_df.loc[mood_col.idxmin()]
+
+                summaries = ""
+                if "summary" in week_df.columns:
+                    rows_s = week_df[["date", "summary"]].dropna(subset=["summary"])
+                    if not rows_s.empty:
+                        summaries = "\n".join(
+                            f"  {r['date'].strftime('%a %b %d')}: {r['summary']}"
+                            for _, r in rows_s.iterrows()
+                        )
+
+                foods_log = _parse_foods_for_context(week_df)
+
+                stats = f"""
+Week: {week_start} → {week_end} ({len(week_df)} entries)
+
+TRAINING
+  Gym sessions: {gym_days} / {len(week_df)} days
+  Workout types: {workout_types}
+
+NUTRITION
+  Avg calories: {_safe_avg('calories_est')} kcal
+  Avg protein:  {_safe_avg('protein_est')} g
+  Avg water:    {_safe_avg('water_bottles')} bottles
+
+SLEEP & RECOVERY
+  Avg sleep:         {_safe_avg('sleep_hours')} h
+  Avg sleep quality: {_safe_avg('sleep_quality_1_10')} / 10
+
+MIND & PERFORMANCE
+  Avg mood:     {_safe_avg('mood_1_10')} / 10{
+  f" (best: {best_mood_row['mood_1_10']} on {best_mood_row['date'].strftime('%a')}, worst: {worst_mood_row['mood_1_10']} on {worst_mood_row['date'].strftime('%a')})"
+  if best_mood_row is not None else ""}
+  Avg study:    {_safe_avg('study_hours')} h
+  Creatine:     {creatine_days} / {len(week_df)} days
+
+WEIGHT
+  Latest: {_safe_avg('weight')} lbs (avg over week)
+
+DAILY SUMMARIES
+{summaries if summaries else "  (none logged)"}
+
+FOODS EATEN THIS WEEK
+{foods_log if foods_log else "  (not available)"}
+""".strip()
+
+                with st.spinner("Generating review..."):
+                    try:
+                        resp = openai_client.chat.completions.create(
+                            model="gpt-4.1-mini",
+                            temperature=0.7,
+                            messages=[
+                                {
+                                    "role": "system",
+                                    "content": (
+                                        "You are a personal health coach reviewing someone's week of journal data. "
+                                        "Write a concise, encouraging, and specific weekly review. "
+                                        "Cover: training consistency, nutrition highlights, sleep quality, "
+                                        "mood/energy trends, and 2-3 actionable suggestions for next week. "
+                                        "Use markdown with headers. Keep it personal and motivating, not generic."
+                                    ),
+                                },
+                                {
+                                    "role": "user",
+                                    "content": f"Here is my week's data:\n\n{stats}\n\nWrite my weekly review.",
+                                },
+                            ],
+                        )
+                        st.session_state.weekly_review_text = resp.choices[0].message.content
+                    except Exception as e:
+                        st.error(f"GPT error: {e}")
+
+        if st.session_state.weekly_review_text:
+            st.markdown("---")
+            st.markdown(st.session_state.weekly_review_text)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ASK YOUR DATA TAB
+# ═════════════════════════════════════════════════════════════════════════════
+with tab_ask:
+    st.markdown("## Ask Your Data")
+    st.caption("Ask anything about your health history — foods, habits, trends, counts.")
+
+    try:
+        gc_ask = get_client(_service_json)
+        df_ask_all = load_sheet_data(gc_ask, _sheet_name)
+    except Exception as e:
+        st.error(f"Could not load sheet data: {e}")
+        df_ask_all = pd.DataFrame()
+
+    if df_ask_all.empty:
+        st.info("No data yet. Log some entries first.")
+    else:
+        question = st.text_input(
+            "Your question",
+            placeholder="How many times did I get Taco Bell this month?",
+            key="nl_question",
+        )
+        ask_btn = st.button("Ask", type="primary", key="nl_ask_btn")
+
+        if ask_btn and question.strip():
+            metrics_ctx = _build_metrics_context(df_ask_all)
+            foods_ctx = _parse_foods_for_context(df_ask_all)
+            today_str = datetime.date.today().strftime("%B %d, %Y")
+
+            system_msg = (
+                f"You are a data analyst answering questions about someone's personal health journal. "
+                f"Today is {today_str}. "
+                "Answer precisely and concisely. Give counts or numbers whenever possible. "
+                "If something isn't in the data, say so clearly. Do not make up information."
+            )
+            user_msg = (
+                f"Here is my health data (CSV, most recent first):\n\n{metrics_ctx}\n\n"
+                f"Here is a log of every food I ate, by date:\n\n{foods_ctx}\n\n"
+                f"My question: {question.strip()}"
+            )
+
+            with st.spinner("Thinking..."):
+                try:
+                    resp = openai_client.chat.completions.create(
+                        model="gpt-4.1-mini",
+                        temperature=0,
+                        messages=[
+                            {"role": "system", "content": system_msg},
+                            {"role": "user", "content": user_msg},
+                        ],
+                    )
+                    answer = resp.choices[0].message.content
+                    # Prepend to history (newest first)
+                    st.session_state.nl_answers = [
+                        {"q": question.strip(), "a": answer}
+                    ] + st.session_state.nl_answers[:4]
+                except Exception as e:
+                    st.error(f"GPT error: {e}")
+
+        # Display Q&A history
+        if st.session_state.nl_answers:
+            st.markdown("---")
+            for qa in st.session_state.nl_answers:
+                st.markdown(
+                    f'<div class="qa-block">'
+                    f'<strong>Q:</strong> {qa["q"]}'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+                st.markdown(qa["a"])
+                st.markdown("")
+
+        # Transparency expander
+        if not df_ask_all.empty:
+            with st.expander("🔍 Data context sent to GPT"):
+                st.caption("Metrics (last 90 days):")
+                st.code(_build_metrics_context(df_ask_all), language="")
+                st.caption("Foods log:")
+                st.code(_parse_foods_for_context(df_ask_all) or "(none)", language="")
