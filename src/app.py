@@ -591,7 +591,7 @@ def _generate_timelapse_from_photos(photos: list, svc_json: str) -> bytes | None
 # ─────────────────────────────────────────────────────────────────────────────
 # Session state
 # ─────────────────────────────────────────────────────────────────────────────
-for _k in ("pending_data", "pending_entry", "pending_date", "weekly_review_text", "nl_answers", "timelapse_gif", "photo_upload_error"):
+for _k in ("pending_data", "pending_entry", "pending_date", "weekly_review_text", "nl_answers", "timelapse_gif", "photo_upload_error", "pending_photo_bytes"):
     if _k not in st.session_state:
         st.session_state[_k] = None
 if st.session_state.nl_answers is None:
@@ -642,7 +642,7 @@ with tab_log:
                     st.error(f"Extraction failed: {e}")
 
     if reset_clicked:
-        for _k in ("pending_data", "pending_entry", "pending_date"):
+        for _k in ("pending_data", "pending_entry", "pending_date", "pending_photo_bytes", "photo_upload_error"):
             st.session_state[_k] = None
         st.rerun()
 
@@ -745,6 +745,11 @@ with tab_log:
         st.markdown("#### 📸 Daily Photo")
         st.caption("Optional — snap a quick selfie to log alongside today's entry.")
         photo_img = st.camera_input("Take photo", key="daily_photo", label_visibility="collapsed")
+        # Persist bytes immediately so they survive the button-click rerun
+        if photo_img is not None:
+            st.session_state.pending_photo_bytes = photo_img.getvalue()
+        if st.session_state.pending_photo_bytes:
+            st.caption("Photo ready to upload with save.")
 
         # ── Save ─────────────────────────────────────────────────────────
         st.markdown("---")
@@ -789,20 +794,21 @@ with tab_log:
             daily_row["full_entry"] = st.session_state.pending_entry or ""
 
             # Upload photo if one was taken
-            captured = st.session_state.get("daily_photo")
-            if captured is not None:
+            captured_bytes = st.session_state.get("pending_photo_bytes")
+            if captured_bytes:
                 try:
                     with st.spinner("Uploading photo to Google Drive…"):
                         photo_url = _upload_photo_to_drive(
-                            _service_json, captured.getvalue(), daily_row["date"]
+                            _service_json, captured_bytes, daily_row["date"]
                         )
                     ensure_column(daily_ws, "photo_url")
                     # Store as a HYPERLINK formula so the cell is a labeled
                     # clickable link in Google Sheets ("📷 View Photo")
                     daily_row["photo_url"] = f'=HYPERLINK("{photo_url}", "📷 View Photo")'
                     st.session_state.photo_upload_error = None
+                    st.session_state.pending_photo_bytes = None
                     st.toast("Photo uploaded!", icon="📸")
-                except Exception as photo_err:
+                except Exception:
                     import traceback
                     st.session_state.photo_upload_error = (
                         f"**Photo upload failed** (entry was still saved).\n\n"
@@ -814,7 +820,7 @@ with tab_log:
 
             load_sheet_data.clear()
             st.success("✅ Saved to Google Sheets!")
-            for _k in ("pending_data", "pending_entry", "pending_date"):
+            for _k in ("pending_data", "pending_entry", "pending_date", "pending_photo_bytes"):
                 st.session_state[_k] = None
             st.rerun()
 
