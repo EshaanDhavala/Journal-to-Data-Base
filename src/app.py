@@ -500,43 +500,52 @@ with tab_dash:
         n1, n2 = st.columns(2)
         with n1:
             c = _trend(df, "calories_est", "Calories", "#fab387")
-            st.altair_chart(c, use_container_width=True) if c else st.caption("No calorie data yet.")
+            if c:
+                st.altair_chart(c, use_container_width=True)
         with n2:
             c = _trend(df, "protein_est", "Protein (g)", "#a6e3a1")
-            st.altair_chart(c, use_container_width=True) if c else st.caption("No protein data yet.")
+            if c:
+                st.altair_chart(c, use_container_width=True)
 
         # ── Body & Sleep ──────────────────────────────────────────────────
         st.markdown("### 💤 Body & Sleep")
         b1, b2, b3 = st.columns(3)
         with b1:
             c = _trend(df, "weight", "Weight (lbs)", "#89b4fa")
-            st.altair_chart(c, use_container_width=True) if c else st.caption("No weight data yet.")
+            if c:
+                st.altair_chart(c, use_container_width=True)
         with b2:
             c = _bars(df, "sleep_hours", "Sleep Hours", "#b4befe")
-            st.altair_chart(c, use_container_width=True) if c else st.caption("No sleep data yet.")
+            if c:
+                st.altair_chart(c, use_container_width=True)
         with b3:
             c = _trend(df, "sleep_quality_1_10", "Sleep Quality (1–10)", "#cba6f7")
-            st.altair_chart(c, use_container_width=True) if c else st.caption("No sleep quality data yet.")
+            if c:
+                st.altair_chart(c, use_container_width=True)
 
         # ── Performance ───────────────────────────────────────────────────
         st.markdown("### 🧠 Performance")
         p1, p2, p3 = st.columns(3)
         with p1:
             c = _trend(df, "mood_1_10", "Mood (1–10)", "#f9e2af")
-            st.altair_chart(c, use_container_width=True) if c else st.caption("No mood data yet.")
+            if c:
+                st.altair_chart(c, use_container_width=True)
         with p2:
             c = _bars(df, "study_hours", "Study Hours", "#89dceb")
-            st.altair_chart(c, use_container_width=True) if c else st.caption("No study data yet.")
+            if c:
+                st.altair_chart(c, use_container_width=True)
         with p3:
             c = _bars(df, "screen_time_hours", "Screen Time (h)", "#f38ba8")
-            st.altair_chart(c, use_container_width=True) if c else st.caption("No screen time data yet.")
+            if c:
+                st.altair_chart(c, use_container_width=True)
 
         # ── Training ──────────────────────────────────────────────────────
         st.markdown("### 🏋️ Training")
         t1, t2 = st.columns(2)
         with t1:
             c = _bars(df, "workout_minutes", "Workout Minutes", "#a6e3a1")
-            st.altair_chart(c, use_container_width=True) if c else st.caption("No workout data yet.")
+            if c:
+                st.altair_chart(c, use_container_width=True)
         with t2:
             if "workout_type" in df.columns:
                 wt_counts = df["workout_type"].dropna().value_counts().reset_index()
@@ -557,15 +566,14 @@ with tab_dash:
                         .properties(height=195, title="Workout Type Distribution")
                     )
                     st.altair_chart(donut, use_container_width=True)
-                else:
-                    st.caption("No workout type data yet.")
 
         # ── Habits ────────────────────────────────────────────────────────
         st.markdown("### 💧 Habits")
         h1, h2 = st.columns(2)
         with h1:
             c = _bars(df, "water_bottles", "Water Bottles", "#74c7ec")
-            st.altair_chart(c, use_container_width=True) if c else st.caption("No water data yet.")
+            if c:
+                st.altair_chart(c, use_container_width=True)
         with h2:
             if "creatine" in df.columns:
                 cre_df = df[["date", "creatine"]].copy()
@@ -573,7 +581,8 @@ with tab_dash:
                     lambda x: 1 if str(x).strip().lower() in ("true", "1", "yes") else 0
                 )
                 c = _bars(cre_df, "creatine", "Creatine (1 = taken)", "#cba6f7")
-                st.altair_chart(c, use_container_width=True) if c else st.caption("No creatine data yet.")
+                if c:
+                    st.altair_chart(c, use_container_width=True)
 
         # ── Raw data ──────────────────────────────────────────────────────
         st.markdown("---")
