@@ -468,7 +468,8 @@ def _upload_photo_to_drive(service_json_str: str, img_bytes: bytes, date_str: st
         headers={**headers, "Content-Type": f"multipart/related; boundary={boundary}"},
         data=body,
     )
-    resp.raise_for_status()
+    if not resp.ok:
+        raise RuntimeError(f"Drive upload failed {resp.status_code}: {resp.text}")
     file_id = resp.json()["id"]
 
     # Make publicly viewable
