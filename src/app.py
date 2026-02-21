@@ -404,7 +404,12 @@ def _get_drive_token(service_json_str: str) -> str:
 
 
 def _drive_get_or_create_folder(token: str, folder_name: str) -> str:
-    """Return the Drive folder ID for folder_name, creating it if needed."""
+    """
+    Return the Drive folder ID for folder_name.
+    The folder must exist in the user's Google Drive and be shared with the
+    service account (Editor access). Service accounts cannot create their own
+    Drive storage, so auto-creation is not supported.
+    """
     headers = {"Authorization": f"Bearer {token}"}
     resp = _requests.get(
         "https://www.googleapis.com/drive/v3/files",
@@ -421,12 +426,11 @@ def _drive_get_or_create_folder(token: str, folder_name: str) -> str:
     files = resp.json().get("files", [])
     if files:
         return files[0]["id"]
-    resp = _requests.post(
-        "https://www.googleapis.com/drive/v3/files",
-        headers=headers,
-        json={"name": folder_name, "mimeType": "application/vnd.google-apps.folder"},
+    raise RuntimeError(
+        f"Google Drive folder '{folder_name}' not found. "
+        "Create a folder with that name in your personal Google Drive and share it "
+        "with the service account email (Editor access)."
     )
-    return resp.json()["id"]
 
 
 def _upload_photo_to_drive(service_json_str: str, img_bytes: bytes, date_str: str) -> str:
