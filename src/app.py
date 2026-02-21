@@ -591,7 +591,7 @@ def _generate_timelapse_from_photos(photos: list, svc_json: str) -> bytes | None
 # ─────────────────────────────────────────────────────────────────────────────
 # Session state
 # ─────────────────────────────────────────────────────────────────────────────
-for _k in ("pending_data", "pending_entry", "pending_date", "weekly_review_text", "nl_answers", "timelapse_gif"):
+for _k in ("pending_data", "pending_entry", "pending_date", "weekly_review_text", "nl_answers", "timelapse_gif", "photo_upload_error"):
     if _k not in st.session_state:
         st.session_state[_k] = None
 if st.session_state.nl_answers is None:
@@ -748,6 +748,11 @@ with tab_log:
 
         # ── Save ─────────────────────────────────────────────────────────
         st.markdown("---")
+        if st.session_state.photo_upload_error:
+            st.error(st.session_state.photo_upload_error)
+            if st.button("Dismiss photo error", key="dismiss_photo_err"):
+                st.session_state.photo_upload_error = None
+                st.rerun()
         if st.button("💾  Confirm & Save", type="primary", use_container_width=True):
             answers = {}
             errors = []
@@ -795,11 +800,12 @@ with tab_log:
                     # Store as a HYPERLINK formula so the cell is a labeled
                     # clickable link in Google Sheets ("📷 View Photo")
                     daily_row["photo_url"] = f'=HYPERLINK("{photo_url}", "📷 View Photo")'
+                    st.session_state.photo_upload_error = None
                     st.toast("Photo uploaded!", icon="📸")
                 except Exception as photo_err:
                     import traceback
-                    st.error(
-                        f"**Photo upload failed** (entry will still save).\n\n"
+                    st.session_state.photo_upload_error = (
+                        f"**Photo upload failed** (entry was still saved).\n\n"
                         f"```\n{traceback.format_exc()}\n```"
                     )
 
