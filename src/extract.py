@@ -341,6 +341,30 @@ def sanity_bad_uniform_macros(foods: List[Dict[str, Any]]) -> bool:
     return most_common[1] >= 4
 
 
+def _parse_json_object(text: str) -> Dict[str, Any]:
+    payload = (text or "").strip()
+    if not payload:
+        raise ValueError("Model returned empty content.")
+
+    # Strict path
+    try:
+        obj = json.loads(payload)
+        if isinstance(obj, dict):
+            return obj
+    except Exception:
+        pass
+
+    # Fallback for markdown-wrapped or extra-text responses
+    start = payload.find("{")
+    end = payload.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        obj = json.loads(payload[start : end + 1])
+        if isinstance(obj, dict):
+            return obj
+
+    raise ValueError("Model did not return a valid JSON object.")
+
+
 def call_gpt(entry: str, date: str, extra_rules: str = "") -> Dict[str, Any]:
     msg = f"""<RAW_JOURNAL>
 {entry}
@@ -352,16 +376,35 @@ Journal entry date (local): {date}
 
 {extra_rules}
 """
-    resp = client.chat.completions.create(
-        model="gpt-4.1-mini",
-        messages=[
-            {"role": "system", "content": SYSTEM},
-            {"role": "user", "content": msg},
-        ],
-        temperature=0.1,
-        response_format={"type": "json_object"},
-    )
-    return json.loads(resp.choices[0].message.content)
+    models = ["gpt-4.1-mini", "gpt-4o-mini"]
+    last_err: Optional[Exception] = None
+
+    for model in models:
+        req = dict(
+            model=model,
+            messages=[
+                {"role": "system", "content": SYSTEM},
+                {"role": "user", "content": msg},
+            ],
+            temperature=0.1,
+        )
+
+        # Try strict JSON mode first, then plain completion mode.
+        for use_json_mode in (True, False):
+            try:
+                if use_json_mode:
+                    resp = client.chat.completions.create(
+                        **req,
+                        response_format={"type": "json_object"},
+                    )
+                else:
+                    resp = client.chat.completions.create(**req)
+                return _parse_json_object(resp.choices[0].message.content or "")
+            except Exception as e:
+                last_err = e
+                continue
+
+    raise RuntimeError(f"OpenAI extraction request failed after retries. Last error: {last_err}")
 
 
 def extract(entry: str, date: str) -> Extraction:
