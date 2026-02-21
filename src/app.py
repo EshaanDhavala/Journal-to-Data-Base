@@ -78,6 +78,11 @@ hr { opacity: 0.25; }
 
 /* Dataframe */
 div[data-testid="stDataFrame"] { border-radius: 10px; overflow: hidden; }
+
+/* Hide Vega-Embed toolbar (the "..." menu with source/download options) */
+.vega-embed details { display: none !important; }
+.vega-embed summary { display: none !important; }
+.vega-embed .vega-actions { display: none !important; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -248,7 +253,7 @@ for _k in ("pending_data", "pending_entry", "pending_date"):
 # ─────────────────────────────────────────────────────────────────────────────
 # Tabs
 # ─────────────────────────────────────────────────────────────────────────────
-tab_log, tab_dash = st.tabs(["📝  Log Entry", "📊  Dashboard"])
+tab_log, tab_dash = st.tabs(["Log Entry", "Dashboard"])
 
 # ═════════════════════════════════════════════════════════════════════════════
 # LOG ENTRY TAB
@@ -270,7 +275,7 @@ with tab_log:
 
     col_extract, col_reset, col_pad = st.columns([2, 1, 2])
     with col_extract:
-        extract_clicked = st.button("⚡  Extract", type="primary", use_container_width=True)
+        extract_clicked = st.button("Extract", type="primary", use_container_width=True)
     with col_reset:
         reset_clicked = st.button("↺  Reset", use_container_width=True)
 
