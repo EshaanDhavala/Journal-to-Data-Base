@@ -232,7 +232,7 @@ def _bars(df: pd.DataFrame, y: str, title: str, color: str = "#6ca0dc", height: 
         return None
     return (
         alt.Chart(sub)
-        .mark_bar(color=color, opacity=0.80, cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
+        .mark_bar(color=color, opacity=0.80)
         .encode(
             x=alt.X("date:T", title=None, axis=alt.Axis(format="%b %d", labelAngle=-30, tickCount=6)),
             y=alt.Y(f"{y}:Q", title=None),
@@ -579,7 +579,7 @@ with tab_dash:
                 st.altair_chart(c, use_container_width=True)
         with h2:
             if "creatine" in df.columns:
-                cre_df = df[["date", "creatine"]].copy()
+                cre_df = df[["date", "creatine"]].dropna().copy()
                 cre_df["creatine"] = cre_df["creatine"].map(
                     lambda x: 1 if str(x).strip().lower() in ("true", "1", "yes") else 0
                 )
