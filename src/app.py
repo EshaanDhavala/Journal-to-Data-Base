@@ -646,6 +646,13 @@ with tab_log:
             st.session_state[_k] = None
         st.rerun()
 
+    # Show any persistent photo upload error (survives the post-save rerun)
+    if st.session_state.photo_upload_error:
+        st.error(st.session_state.photo_upload_error)
+        if st.button("Dismiss", key="dismiss_photo_err"):
+            st.session_state.photo_upload_error = None
+            st.rerun()
+
     # ── Extracted data display ────────────────────────────────────────────
     data = st.session_state.pending_data
     if data:
@@ -753,11 +760,6 @@ with tab_log:
 
         # ── Save ─────────────────────────────────────────────────────────
         st.markdown("---")
-        if st.session_state.photo_upload_error:
-            st.error(st.session_state.photo_upload_error)
-            if st.button("Dismiss photo error", key="dismiss_photo_err"):
-                st.session_state.photo_upload_error = None
-                st.rerun()
         if st.button("💾  Confirm & Save", type="primary", use_container_width=True):
             answers = {}
             errors = []
@@ -819,6 +821,7 @@ with tab_log:
             append_signals(signals_ws, validated["date"], validated.get("signals", []))
 
             load_sheet_data.clear()
+            _cached_drive_photos.clear()
             st.success("✅ Saved to Google Sheets!")
             for _k in ("pending_data", "pending_entry", "pending_date", "pending_photo_bytes"):
                 st.session_state[_k] = None
