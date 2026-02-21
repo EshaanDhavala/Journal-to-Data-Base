@@ -1,0 +1,12 @@
+# Secrets
+secrets/
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Not needed for cloud
+main.py
