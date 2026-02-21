@@ -190,6 +190,9 @@ def load_sheet_data(_gc, sheet_name: str) -> pd.DataFrame:
     if not records:
         return pd.DataFrame()
     df = pd.DataFrame(records)
+    # Blank cells from gspread come back as "" — replace with NaN so dropna()
+    # correctly skips columns that weren't tracked yet.
+    df = df.replace("", None)
     if "date" not in df.columns:
         return df
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
