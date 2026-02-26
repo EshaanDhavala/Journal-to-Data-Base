@@ -406,18 +406,23 @@ def _upload_photo(img_bytes: bytes, api_key: str) -> str:
 
 def _generate_timelapse(urls: list) -> bytes | None:
     """Download photos from public URLs and compile into an animated GIF."""
-    from PIL import Image
+    from PIL import Image, ImageOps
     from PIL.Image import Resampling
     import io as _io
 
+    TARGET = 480
     frames = []
     for url in urls:
         try:
             resp = _requests.get(url, timeout=20)
             resp.raise_for_status()
-            img = Image.open(_io.BytesIO(resp.content)).convert("RGB")
-            img = img.resize((480, 480), Resampling.LANCZOS)
-            frames.append(img)
+            img = Image.open(_io.BytesIO(resp.content))
+            img = ImageOps.exif_transpose(img)   # honour phone EXIF rotation
+            img = img.convert("RGB")
+            img.thumbnail((TARGET, TARGET), Resampling.LANCZOS)  # preserve aspect ratio
+            canvas = Image.new("RGB", (TARGET, TARGET), (0, 0, 0))
+            canvas.paste(img, ((TARGET - img.width) // 2, (TARGET - img.height) // 2))
+            frames.append(canvas)
         except Exception:
             continue
 
@@ -773,18 +778,30 @@ with tab_dash:
                 st.image(latest_p["photo_url"], use_column_width=True)
             with tl_col:
                 st.caption(
-                    f"{n_photos} photo{'s' if n_photos != 1 else ''} logged · "
-                    "GIF plays all photos in order, 0.6s/frame"
+                    f"{n_photos} photo{'s' if n_photos != 1 else ''} logged"
+                    + (" · GIF plays all photos in order, 0.6s/frame" if n_photos > 1 else "")
                 )
-                if st.button("🎬 Generate Timelapse", key="timelapse_btn"):
-                    with st.spinner(f"Downloading {n_photos} photo{'s' if n_photos != 1 else ''} and building GIF…"):
-                        gif = _generate_timelapse(photo_df["photo_url"].tolist())
-                    if gif:
-                        st.session_state["timelapse_gif"] = gif
-                    else:
-                        st.warning("Could not build timelapse — photos may not have loaded.")
-                if st.session_state.get("timelapse_gif"):
-                    st.image(st.session_state["timelapse_gif"], width=420)
+                if n_photos > 1:
+                    if st.button("🎬 Generate Timelapse", key="timelapse_btn"):
+                        with st.spinner(f"Downloading {n_photos} photos and building GIF…"):
+                            gif = _generate_timelapse(photo_df["photo_url"].tolist())
+                        if gif:
+                            st.session_state["timelapse_gif"] = gif
+                        else:
+                            st.warning("Could not build timelapse — photos may not have loaded.")
+                    if st.session_state.get("timelapse_gif"):
+                        st.image(st.session_state["timelapse_gif"], width=420)
+
+            # ── Photo grid ────────────────────────────────────────────────
+            with st.expander(f"All photos ({n_photos})", expanded=False):
+                COLS = 3
+                for row_start in range(0, n_photos, COLS):
+                    row_slice = photo_df.iloc[row_start:row_start + COLS]
+                    grid_cols = st.columns(COLS)
+                    for col_idx, (_, p) in enumerate(row_slice.iterrows()):
+                        with grid_cols[col_idx]:
+                            st.image(p["photo_url"], use_column_width=True)
+                            st.caption(p["date"].strftime("%b %d, %Y"))
 
         st.markdown("---")
 
