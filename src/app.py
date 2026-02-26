@@ -115,6 +115,7 @@ div[data-testid="stDataFrame"] { border-radius: 10px; overflow: hidden; }
 # ─────────────────────────────────────────────────────────────────────────────
 _service_json = json.dumps(dict(st.secrets["gcp_service_account"]))
 _sheet_name = st.secrets["GOOGLE_SHEET_NAME"]
+_imgbb_api_key = st.secrets.get("IMGBB_API_KEY", "")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -384,195 +385,37 @@ def _build_metrics_context(df: pd.DataFrame, max_rows: int = 90) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Google Drive photo helpers
+# Photo upload helper (imgbb)
 # ─────────────────────────────────────────────────────────────────────────────
 import requests as _requests
-from google.oauth2.service_account import Credentials as _SACredentials
-from google.auth.transport.requests import Request as _GARequest
-
-_DRIVE_FOLDER_NAME = "Journal Photos"
+import base64 as _base64
 
 
-def _get_drive_token(service_json_str: str) -> str:
-    """Return a fresh OAuth2 bearer token scoped for Drive."""
-    info = json.loads(service_json_str)
-    creds = _SACredentials.from_service_account_info(
-        info, scopes=["https://www.googleapis.com/auth/drive"]
-    )
-    creds.refresh(_GARequest())
-    return creds.token
-
-
-def _drive_get_or_create_folder(token: str, folder_name: str) -> str:
-    """
-    Return the Drive folder ID for folder_name.
-    The folder must exist in the user's Google Drive and be shared with the
-    service account (Editor access). Service accounts cannot create their own
-    Drive storage, so auto-creation is not supported.
-    """
-    headers = {"Authorization": f"Bearer {token}"}
-    resp = _requests.get(
-        "https://www.googleapis.com/drive/v3/files",
-        headers=headers,
-        params={
-            "q": (
-                f"name='{folder_name}' "
-                "and mimeType='application/vnd.google-apps.folder' "
-                "and trashed=false"
-            ),
-            "fields": "files(id)",
-        },
-    )
-    files = resp.json().get("files", [])
-    if files:
-        return files[0]["id"]
-    raise RuntimeError(
-        f"Google Drive folder '{folder_name}' not found. "
-        "Create a folder with that name in your personal Google Drive and share it "
-        "with the service account email (Editor access)."
-    )
-
-
-def _upload_photo_to_drive(service_json_str: str, img_bytes: bytes, date_str: str) -> str:
-    """
-    Upload img_bytes as {date_str}.jpg into the 'Journal Photos' Drive folder.
-    Makes the file publicly viewable and returns a direct image URL.
-    """
-    token = _get_drive_token(service_json_str)
-    headers = {"Authorization": f"Bearer {token}"}
-
-    folder_id = _drive_get_or_create_folder(token, _DRIVE_FOLDER_NAME)
-    filename = f"{date_str}.jpg"
-
-    # Delete any existing photo for this date
-    resp = _requests.get(
-        "https://www.googleapis.com/drive/v3/files",
-        headers=headers,
-        params={
-            "q": f"name='{filename}' and '{folder_id}' in parents and trashed=false",
-            "fields": "files(id)",
-        },
-    )
-    for f in resp.json().get("files", []):
-        _requests.delete(
-            f"https://www.googleapis.com/drive/v3/files/{f['id']}",
-            headers=headers,
-        )
-
-    # Multipart upload (metadata + binary)
-    boundary = "===journal_photo_boundary==="
-    body = (
-        f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n"
-        f'{json.dumps({"name": filename, "parents": [folder_id]})}\r\n'
-        f"--{boundary}\r\nContent-Type: image/jpeg\r\n\r\n"
-    ).encode() + img_bytes + f"\r\n--{boundary}--".encode()
-
+def _upload_photo(img_bytes: bytes, api_key: str) -> str:
+    """Upload img_bytes to imgbb and return the direct image URL."""
+    b64 = _base64.b64encode(img_bytes).decode()
     resp = _requests.post(
-        "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
-        headers={**headers, "Content-Type": f"multipart/related; boundary={boundary}"},
-        data=body,
+        "https://api.imgbb.com/1/upload",
+        data={"key": api_key, "image": b64},
+        timeout=30,
     )
     if not resp.ok:
-        raise RuntimeError(f"Drive upload failed {resp.status_code}: {resp.text}")
-    file_id = resp.json()["id"]
-
-    # Make publicly viewable
-    _requests.post(
-        f"https://www.googleapis.com/drive/v3/files/{file_id}/permissions",
-        headers=headers,
-        json={"role": "reader", "type": "anyone"},
-    )
-
-    return f"https://drive.google.com/uc?id={file_id}&export=view"
+        raise RuntimeError(f"imgbb upload failed {resp.status_code}: {resp.text}")
+    return resp.json()["data"]["url"]
 
 
-def _list_drive_photos(service_json_str: str) -> list:
-    """
-    Return [{date, file_id, url}] sorted ascending by date for every photo
-    in the 'Journal Photos' Drive folder.
-    """
-    token = _get_drive_token(service_json_str)
-    headers = {"Authorization": f"Bearer {token}"}
-
-    resp = _requests.get(
-        "https://www.googleapis.com/drive/v3/files",
-        headers=headers,
-        params={
-            "q": (
-                f"name='{_DRIVE_FOLDER_NAME}' "
-                "and mimeType='application/vnd.google-apps.folder' "
-                "and trashed=false"
-            ),
-            "fields": "files(id)",
-        },
-    )
-    folders = resp.json().get("files", [])
-    if not folders:
-        return []
-    folder_id = folders[0]["id"]
-
-    resp = _requests.get(
-        "https://www.googleapis.com/drive/v3/files",
-        headers=headers,
-        params={
-            "q": f"'{folder_id}' in parents and mimeType='image/jpeg' and trashed=false",
-            "fields": "files(id,name)",
-            "orderBy": "name",
-            "pageSize": 1000,
-        },
-    )
-    return [
-        {
-            "date": f["name"].replace(".jpg", ""),
-            "file_id": f["id"],
-            "url": f"https://drive.google.com/uc?id={f['id']}&export=view",
-        }
-        for f in resp.json().get("files", [])
-    ]
-
-
-@st.cache_data(ttl=300)
-def _cached_drive_photos(_svc: str) -> list:
-    """Cached wrapper around _list_drive_photos (5-min TTL)."""
-    return _list_drive_photos(_svc)
-
-
-@st.cache_data(ttl=300)
-def _fetch_drive_image_bytes(_svc: str, file_id: str) -> bytes | None:
-    """
-    Authenticated download of a single Drive file as raw bytes.
-    Cached for 5 minutes so the same photo isn't re-fetched on every rerun.
-    """
-    try:
-        token = _get_drive_token(_svc)
-        resp = _requests.get(
-            f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=20,
-        )
-        resp.raise_for_status()
-        return resp.content
-    except Exception:
-        return None
-
-
-def _generate_timelapse_from_photos(photos: list, svc_json: str) -> bytes | None:
-    """
-    Download each photo via authenticated Drive API and compile into an
-    animated GIF (600ms/frame). Returns raw GIF bytes, or None if no frames
-    could be loaded.
-    """
+def _generate_timelapse(urls: list) -> bytes | None:
+    """Download photos from public URLs and compile into an animated GIF."""
     from PIL import Image
     from PIL.Image import Resampling
     import io as _io
 
     frames = []
-    for p in photos:
+    for url in urls:
         try:
-            img_bytes = _fetch_drive_image_bytes(svc_json, p["file_id"])
-            if not img_bytes:
-                continue
-            img = Image.open(_io.BytesIO(img_bytes)).convert("RGB")
+            resp = _requests.get(url, timeout=20)
+            resp.raise_for_status()
+            img = Image.open(_io.BytesIO(resp.content)).convert("RGB")
             img = img.resize((480, 480), Resampling.LANCZOS)
             frames.append(img)
         except Exception:
@@ -587,7 +430,7 @@ def _generate_timelapse_from_photos(photos: list, svc_json: str) -> bytes | None
         format="GIF",
         save_all=True,
         append_images=frames[1:],
-        duration=600,   # 0.6s per frame
+        duration=600,
         loop=0,
     )
     return output.getvalue()
@@ -803,30 +646,30 @@ with tab_log:
             # Upload photo if one was taken
             captured_bytes = st.session_state.get("pending_photo_bytes")
             if captured_bytes:
-                try:
-                    with st.spinner("Uploading photo to Google Drive…"):
-                        photo_url = _upload_photo_to_drive(
-                            _service_json, captured_bytes, daily_row["date"]
-                        )
-                    ensure_column(daily_ws, "photo_url")
-                    # Store as a HYPERLINK formula so the cell is a labeled
-                    # clickable link in Google Sheets ("📷 View Photo")
-                    daily_row["photo_url"] = f'=HYPERLINK("{photo_url}", "📷 View Photo")'
-                    st.session_state.photo_upload_error = None
-                    st.session_state.pending_photo_bytes = None
-                    st.toast("Photo uploaded!", icon="📸")
-                except Exception:
-                    import traceback
+                if not _imgbb_api_key:
                     st.session_state.photo_upload_error = (
-                        f"**Photo upload failed** (entry was still saved).\n\n"
-                        f"```\n{traceback.format_exc()}\n```"
+                        "**Photo upload skipped** — add `IMGBB_API_KEY` to your Streamlit secrets."
                     )
+                else:
+                    try:
+                        with st.spinner("Uploading photo…"):
+                            photo_url = _upload_photo(captured_bytes, _imgbb_api_key)
+                        ensure_column(daily_ws, "photo_url")
+                        daily_row["photo_url"] = photo_url
+                        st.session_state.photo_upload_error = None
+                        st.session_state.pending_photo_bytes = None
+                        st.toast("Photo uploaded!", icon="📸")
+                    except Exception:
+                        import traceback
+                        st.session_state.photo_upload_error = (
+                            f"**Photo upload failed** (entry was still saved).\n\n"
+                            f"```\n{traceback.format_exc()}\n```"
+                        )
 
             upsert_daily_row(daily_ws, daily_row)
             append_signals(signals_ws, validated["date"], validated.get("signals", []))
 
             load_sheet_data.clear()
-            _cached_drive_photos.clear()
             st.success("✅ Saved to Google Sheets!")
             for _k in ("pending_data", "pending_entry", "pending_date", "pending_photo_bytes"):
                 st.session_state[_k] = None
@@ -912,20 +755,22 @@ with tab_dash:
         # ── Daily Photos & Timelapse ──────────────────────────────────────
         st.markdown("---")
         st.markdown("### 📸 Daily Photos")
-        drive_photos = _cached_drive_photos(_service_json)
-        if not drive_photos:
+        if "photo_url" in df_all.columns:
+            photo_df = df_all[df_all["photo_url"].notna()][["date", "photo_url"]].copy()
+            photo_df = photo_df[photo_df["photo_url"].str.startswith("http", na=False)]
+            photo_df = photo_df.sort_values("date").reset_index(drop=True)
+        else:
+            photo_df = pd.DataFrame()
+
+        if photo_df.empty:
             st.caption("No photos taken yet. Snap a selfie when logging your next entry.")
         else:
-            n_photos = len(drive_photos)
-            latest_p = drive_photos[-1]
+            n_photos = len(photo_df)
+            latest_p = photo_df.iloc[-1]
             ph_col, tl_col = st.columns([1, 2])
             with ph_col:
-                st.caption(f"Latest — {latest_p['date']}")
-                latest_bytes = _fetch_drive_image_bytes(_service_json, latest_p["file_id"])
-                if latest_bytes:
-                    st.image(latest_bytes, use_column_width=True)
-                else:
-                    st.warning("Could not load latest photo.")
+                st.caption(f"Latest — {latest_p['date'].strftime('%Y-%m-%d')}")
+                st.image(latest_p["photo_url"], use_column_width=True)
             with tl_col:
                 st.caption(
                     f"{n_photos} photo{'s' if n_photos != 1 else ''} logged · "
@@ -933,7 +778,7 @@ with tab_dash:
                 )
                 if st.button("🎬 Generate Timelapse", key="timelapse_btn"):
                     with st.spinner(f"Downloading {n_photos} photo{'s' if n_photos != 1 else ''} and building GIF…"):
-                        gif = _generate_timelapse_from_photos(drive_photos, _service_json)
+                        gif = _generate_timelapse(photo_df["photo_url"].tolist())
                     if gif:
                         st.session_state["timelapse_gif"] = gif
                     else:
