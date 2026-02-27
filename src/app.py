@@ -404,18 +404,24 @@ def _upload_photo(img_bytes: bytes, api_key: str) -> str:
     return resp.json()["data"]["url"]
 
 
-def _generate_timelapse(urls: list) -> bytes | None:
-    """Download photos from public URLs and compile into an animated GIF."""
+def _generate_timelapse(urls: list) -> tuple[bytes | None, int]:
+    """
+    Download photos from public URLs and compile into an animated GIF.
+    Returns (gif_bytes_or_None, number_of_frames_loaded).
+    """
     from PIL import Image, ImageOps
     from PIL.Image import Resampling
     import io as _io
 
     TARGET = 480
+    _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; JournalToData/1.0)"}
     frames = []
     for url in urls:
         try:
-            resp = _requests.get(url, timeout=20)
+            resp = _requests.get(url, timeout=30, headers=_HEADERS, allow_redirects=True)
             resp.raise_for_status()
+            if "image" not in resp.headers.get("content-type", ""):
+                continue
             img = Image.open(_io.BytesIO(resp.content))
             img = ImageOps.exif_transpose(img)   # honour phone EXIF rotation
             img = img.convert("RGB")
@@ -427,7 +433,7 @@ def _generate_timelapse(urls: list) -> bytes | None:
             continue
 
     if not frames:
-        return None
+        return None, 0
 
     output = _io.BytesIO()
     frames[0].save(
@@ -438,7 +444,7 @@ def _generate_timelapse(urls: list) -> bytes | None:
         duration=600,
         loop=0,
     )
-    return output.getvalue()
+    return output.getvalue(), len(frames)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -783,12 +789,19 @@ with tab_dash:
                 )
                 if n_photos > 1:
                     if st.button("🎬 Generate Timelapse", key="timelapse_btn"):
+                        st.session_state["timelapse_gif"] = None  # clear stale GIF first
                         with st.spinner(f"Downloading {n_photos} photos and building GIF…"):
-                            gif = _generate_timelapse(photo_df["photo_url"].tolist())
-                        if gif:
+                            gif, n_frames = _generate_timelapse(photo_df["photo_url"].tolist())
+                        if gif and n_frames > 1:
                             st.session_state["timelapse_gif"] = gif
+                            st.caption(f"Loaded {n_frames}/{n_photos} frames.")
+                        elif n_frames == 1:
+                            st.warning(
+                                f"Only 1 of {n_photos} photos could be downloaded. "
+                                "Need at least 2 for an animation."
+                            )
                         else:
-                            st.warning("Could not build timelapse — photos may not have loaded.")
+                            st.warning("No photos could be downloaded. Check your internet connection.")
                     if st.session_state.get("timelapse_gif"):
                         st.image(st.session_state["timelapse_gif"], width=420)
 
