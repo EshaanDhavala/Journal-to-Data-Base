@@ -441,7 +441,7 @@ def _generate_timelapse(urls: list) -> tuple[bytes | None, int]:
         format="GIF",
         save_all=True,
         append_images=frames[1:],
-        duration=600,
+        duration=max(100, min(600, 3000 // len(frames))),
         loop=0,
     )
     return output.getvalue(), len(frames)
