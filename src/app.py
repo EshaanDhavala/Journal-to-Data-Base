@@ -803,7 +803,13 @@ with tab_dash:
                         else:
                             st.warning("No photos could be downloaded. Check your internet connection.")
                     if st.session_state.get("timelapse_gif"):
-                        st.image(st.session_state["timelapse_gif"], width=420)
+                        import base64 as _b64
+                        gif_b64 = _b64.b64encode(st.session_state["timelapse_gif"]).decode()
+                        st.markdown(
+                            f'<img src="data:image/gif;base64,{gif_b64}" '
+                            f'style="width:420px; border-radius:10px;">',
+                            unsafe_allow_html=True,
+                        )
 
             # ── Photo grid ────────────────────────────────────────────────
             with st.expander(f"All photos ({n_photos})", expanded=False):
