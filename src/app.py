@@ -428,8 +428,17 @@ def _detect_face_crop(img_rgb, target: int):
     cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
     face_cascade = cv2.CascadeClassifier(cascade_path)
 
+    img_h, img_w = img_rgb.shape[:2]
     gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
-    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60))
+
+    # Try progressively more lenient detection until a face is found
+    faces = []
+    for min_neighbors in (5, 3, 2):
+        faces = face_cascade.detectMultiScale(
+            gray, scaleFactor=1.1, minNeighbors=min_neighbors, minSize=(40, 40)
+        )
+        if len(faces) > 0:
+            break
 
     if len(faces) == 0:
         return None
@@ -437,27 +446,39 @@ def _detect_face_crop(img_rgb, target: int):
     # Pick the largest detected face
     x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
     face_cx = x + w // 2
-    face_cy = y + h // 2
+    # Shift center up so the crop includes hair above the face
+    face_cy = (y + h // 2) - int(h * 0.2)
 
-    # Expand the crop: 1.8× face width on each side so hair, neck, shoulders are visible
-    pad = int(w * 1.8)
-    # Shift the center up slightly to include more hair above the face
-    face_cy_adj = face_cy - int(h * 0.15)
+    # Half-size of the square crop: 2.5× face width so hair/shoulders are visible
+    half = int(w * 2.5)
+    # Make sure half is large enough to always contain the full face bbox
+    half = max(half, w, h)
 
-    img_h, img_w = img_rgb.shape[:2]
-    x1 = max(0, face_cx - pad)
-    y1 = max(0, face_cy_adj - pad)
-    x2 = min(img_w, face_cx + pad)
-    y2 = min(img_h, face_cy_adj + pad)
+    # Compute ideal square bounds
+    x1 = face_cx - half
+    y1 = face_cy - half
+    x2 = face_cx + half
+    y2 = face_cy + half
+
+    # Slide the box inward if it goes out of bounds (keeps it square)
+    if x1 < 0:
+        x2 -= x1
+        x1 = 0
+    if y1 < 0:
+        y2 -= y1
+        y1 = 0
+    if x2 > img_w:
+        x1 -= (x2 - img_w)
+        x2 = img_w
+    if y2 > img_h:
+        y1 -= (y2 - img_h)
+        y2 = img_h
+    # Final clamp (image may be smaller than the desired crop size)
+    x1, y1 = max(0, x1), max(0, y1)
 
     crop = img_rgb[y1:y2, x1:x2]
-    pil_crop = Image.fromarray(crop)
-
-    # Resize to a square canvas
-    pil_crop.thumbnail((target, target), Resampling.LANCZOS)
-    canvas = Image.new("RGB", (target, target), (0, 0, 0))
-    canvas.paste(pil_crop, ((target - pil_crop.width) // 2, (target - pil_crop.height) // 2))
-    return canvas
+    pil_crop = Image.fromarray(crop).resize((target, target), Resampling.LANCZOS)
+    return pil_crop
 
 
 def _generate_timelapse(urls: list) -> tuple[bytes | None, int]:
