@@ -414,98 +414,14 @@ def _upload_photo(img_bytes: bytes, cloud_name: str, api_key: str, api_secret: s
     return resp.json()["secure_url"]
 
 
-def _detect_face_crop(img_rgb, target: int):
-    """
-    Detect the largest face in img_rgb (H×W×3 numpy array) and return a
-    square PIL image (target×target) centered on the face.
-    Returns None if no face is detected.
-    """
-    import cv2
-    from PIL import Image
-    from PIL.Image import Resampling
-
-    cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-    face_cascade = cv2.CascadeClassifier(cascade_path)
-
-    img_h, img_w = img_rgb.shape[:2]
-    gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
-
-    # Try front-face cascade with progressively more lenient settings
-    faces = []
-    for min_neighbors in (5, 3, 2):
-        faces = face_cascade.detectMultiScale(
-            gray, scaleFactor=1.1, minNeighbors=min_neighbors, minSize=(40, 40)
-        )
-        if len(faces) > 0:
-            break
-
-    # If still nothing, try the profile face cascade (handles tilted/side shots)
-    if len(faces) == 0:
-        profile_cascade = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_profileface.xml"
-        )
-        for min_neighbors in (5, 3, 2):
-            faces = profile_cascade.detectMultiScale(
-                gray, scaleFactor=1.1, minNeighbors=min_neighbors, minSize=(40, 40)
-            )
-            if len(faces) > 0:
-                break
-
-    if len(faces) == 0:
-        return None
-
-    # Pick the largest detected face
-    x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
-    face_cx = x + w // 2
-    # Shift center up a bit so hair is included above the face
-    face_cy = (y + h // 2) - int(h * 0.2)
-
-    # Square half-size: 2.5× face width gives room for hair and shoulders
-    half = max(int(w * 2.5), w, h)
-
-    # Ideal square bounds
-    x1 = face_cx - half
-    y1 = face_cy - half
-    x2 = face_cx + half
-    y2 = face_cy + half
-
-    # Slide box inward so it stays within image bounds (preserves square size)
-    if x1 < 0:
-        x2 -= x1; x1 = 0
-    if y1 < 0:
-        y2 -= y1; y1 = 0
-    if x2 > img_w:
-        x1 -= (x2 - img_w); x2 = img_w
-    if y2 > img_h:
-        y1 -= (y2 - img_h); y2 = img_h
-    x1, y1 = max(0, x1), max(0, y1)
-
-    crop = img_rgb[y1:y2, x1:x2]
-    pil_crop = Image.fromarray(crop)
-
-    # If the crop isn't perfectly square (image was smaller than half),
-    # paste it onto a black square canvas to avoid any stretching
-    cw, ch = pil_crop.size
-    if cw != ch:
-        side = max(cw, ch)
-        canvas = Image.new("RGB", (side, side), (0, 0, 0))
-        canvas.paste(pil_crop, ((side - cw) // 2, (side - ch) // 2))
-        pil_crop = canvas
-
-    return pil_crop.resize((target, target), Resampling.LANCZOS)
-
-
 def _generate_timelapse(urls: list) -> tuple[bytes | None, int]:
     """
     Download photos from public URLs and compile into an animated GIF.
-    Detects and centers on the face in each frame so hair/face changes
-    are easy to see. Falls back to center-crop if no face is detected.
     Returns (gif_bytes_or_None, number_of_frames_loaded).
     """
     from PIL import Image, ImageOps
     from PIL.Image import Resampling
     import io as _io
-    import numpy as _np
 
     TARGET = 480
     _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; JournalToData/1.0)"}
@@ -519,18 +435,10 @@ def _generate_timelapse(urls: list) -> tuple[bytes | None, int]:
             img = Image.open(_io.BytesIO(resp.content))
             img = ImageOps.exif_transpose(img)
             img = img.convert("RGB")
-
-            # Try face-centered crop first
-            img_np = _np.array(img)
-            frame = _detect_face_crop(img_np, TARGET)
-
-            if frame is None:
-                # Fallback: show the original photo as-is, letterboxed to fit
-                img.thumbnail((TARGET, TARGET), Resampling.LANCZOS)
-                frame = Image.new("RGB", (TARGET, TARGET), (0, 0, 0))
-                frame.paste(img, ((TARGET - img.width) // 2, (TARGET - img.height) // 2))
-
-            frames.append(frame)
+            img.thumbnail((TARGET, TARGET), Resampling.LANCZOS)
+            canvas = Image.new("RGB", (TARGET, TARGET), (0, 0, 0))
+            canvas.paste(img, ((TARGET - img.width) // 2, (TARGET - img.height) // 2))
+            frames.append(canvas)
         except Exception:
             continue
 
