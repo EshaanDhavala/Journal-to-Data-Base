@@ -115,7 +115,9 @@ div[data-testid="stDataFrame"] { border-radius: 10px; overflow: hidden; }
 # ─────────────────────────────────────────────────────────────────────────────
 _service_json = json.dumps(dict(st.secrets["gcp_service_account"]))
 _sheet_name = st.secrets["GOOGLE_SHEET_NAME"]
-_imgbb_api_key = st.secrets.get("IMGBB_API_KEY", "")
+_cloudinary_cloud_name = st.secrets.get("CLOUDINARY_CLOUD_NAME", "")
+_cloudinary_api_key = st.secrets.get("CLOUDINARY_API_KEY", "")
+_cloudinary_api_secret = st.secrets.get("CLOUDINARY_API_SECRET", "")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -385,23 +387,32 @@ def _build_metrics_context(df: pd.DataFrame, max_rows: int = 90) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Photo upload helper (imgbb)
+# Photo upload helper (Cloudinary)
 # ─────────────────────────────────────────────────────────────────────────────
 import requests as _requests
 import base64 as _base64
+import hashlib as _hashlib
+import time as _time
 
 
-def _upload_photo(img_bytes: bytes, api_key: str) -> str:
-    """Upload img_bytes to imgbb and return the direct image URL."""
-    b64 = _base64.b64encode(img_bytes).decode()
+def _upload_photo(img_bytes: bytes, cloud_name: str, api_key: str, api_secret: str) -> str:
+    """Upload img_bytes to Cloudinary and return the direct image URL."""
+    timestamp = str(int(_time.time()))
+    signature_str = f"timestamp={timestamp}{api_secret}"
+    signature = _hashlib.sha1(signature_str.encode()).hexdigest()
     resp = _requests.post(
-        "https://api.imgbb.com/1/upload",
-        data={"key": api_key, "image": b64},
+        f"https://api.cloudinary.com/v1_1/{cloud_name}/image/upload",
+        data={
+            "api_key": api_key,
+            "timestamp": timestamp,
+            "signature": signature,
+        },
+        files={"file": ("photo.jpg", img_bytes, "image/jpeg")},
         timeout=30,
     )
     if not resp.ok:
-        raise RuntimeError(f"imgbb upload failed {resp.status_code}: {resp.text}")
-    return resp.json()["data"]["url"]
+        raise RuntimeError(f"Cloudinary upload failed {resp.status_code}: {resp.text}")
+    return resp.json()["secure_url"]
 
 
 def _generate_timelapse(urls: list) -> tuple[bytes | None, int]:
@@ -657,14 +668,14 @@ with tab_log:
             # Upload photo if one was taken
             captured_bytes = st.session_state.get("pending_photo_bytes")
             if captured_bytes:
-                if not _imgbb_api_key:
+                if not _cloudinary_cloud_name:
                     st.session_state.photo_upload_error = (
-                        "**Photo upload skipped** — add `IMGBB_API_KEY` to your Streamlit secrets."
+                        "**Photo upload skipped** — add `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and `CLOUDINARY_API_SECRET` to your Streamlit secrets."
                     )
                 else:
                     try:
                         with st.spinner("Uploading photo…"):
-                            photo_url = _upload_photo(captured_bytes, _imgbb_api_key)
+                            photo_url = _upload_photo(captured_bytes, _cloudinary_cloud_name, _cloudinary_api_key, _cloudinary_api_secret)
                         ensure_column(daily_ws, "photo_url")
                         daily_row["photo_url"] = photo_url
                         st.session_state.photo_upload_error = None
