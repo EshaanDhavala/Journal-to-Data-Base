@@ -390,7 +390,6 @@ def _build_metrics_context(df: pd.DataFrame, max_rows: int = 90) -> str:
 # Photo upload helper (Cloudinary)
 # ─────────────────────────────────────────────────────────────────────────────
 import requests as _requests
-import base64 as _base64
 import hashlib as _hashlib
 import time as _time
 
@@ -526,16 +525,10 @@ def _generate_timelapse(urls: list) -> tuple[bytes | None, int]:
             frame = _detect_face_crop(img_np, TARGET)
 
             if frame is None:
-                # Fallback: square crop biased toward the upper portion of the
-                # image (faces are almost never in the bottom half)
-                iw, ih = img.size
-                side = min(iw, ih)
-                left = (iw - side) // 2
-                # Place the crop window in the top 40% of height
-                top = max(0, int(ih * 0.10))
-                top = min(top, ih - side)
-                img_crop = img.crop((left, top, left + side, top + side))
-                frame = img_crop.resize((TARGET, TARGET), Resampling.LANCZOS)
+                # Fallback: show the original photo as-is, letterboxed to fit
+                img.thumbnail((TARGET, TARGET), Resampling.LANCZOS)
+                frame = Image.new("RGB", (TARGET, TARGET), (0, 0, 0))
+                frame.paste(img, ((TARGET - img.width) // 2, (TARGET - img.height) // 2))
 
             frames.append(frame)
         except Exception:
