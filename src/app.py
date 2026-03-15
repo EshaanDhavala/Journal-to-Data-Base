@@ -418,7 +418,7 @@ def _upload_photo(img_bytes: bytes, cloud_name: str, api_key: str, api_secret: s
 def _detect_face_crop(img_rgb, target: int):
     """
     Detect the largest face in img_rgb (H×W×3 numpy array) and return a
-    square PIL crop centered on the face with padding for hair/shoulders.
+    square PIL image (target×target) centered on the face.
     Returns None if no face is detected.
     """
     import cv2
@@ -446,39 +446,42 @@ def _detect_face_crop(img_rgb, target: int):
     # Pick the largest detected face
     x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
     face_cx = x + w // 2
-    # Shift center up so the crop includes hair above the face
+    # Shift center up a bit so hair is included above the face
     face_cy = (y + h // 2) - int(h * 0.2)
 
-    # Half-size of the square crop: 2.5× face width so hair/shoulders are visible
-    half = int(w * 2.5)
-    # Make sure half is large enough to always contain the full face bbox
-    half = max(half, w, h)
+    # Square half-size: 2.5× face width gives room for hair and shoulders
+    half = max(int(w * 2.5), w, h)
 
-    # Compute ideal square bounds
+    # Ideal square bounds
     x1 = face_cx - half
     y1 = face_cy - half
     x2 = face_cx + half
     y2 = face_cy + half
 
-    # Slide the box inward if it goes out of bounds (keeps it square)
+    # Slide box inward so it stays within image bounds (preserves square size)
     if x1 < 0:
-        x2 -= x1
-        x1 = 0
+        x2 -= x1; x1 = 0
     if y1 < 0:
-        y2 -= y1
-        y1 = 0
+        y2 -= y1; y1 = 0
     if x2 > img_w:
-        x1 -= (x2 - img_w)
-        x2 = img_w
+        x1 -= (x2 - img_w); x2 = img_w
     if y2 > img_h:
-        y1 -= (y2 - img_h)
-        y2 = img_h
-    # Final clamp (image may be smaller than the desired crop size)
+        y1 -= (y2 - img_h); y2 = img_h
     x1, y1 = max(0, x1), max(0, y1)
 
     crop = img_rgb[y1:y2, x1:x2]
-    pil_crop = Image.fromarray(crop).resize((target, target), Resampling.LANCZOS)
-    return pil_crop
+    pil_crop = Image.fromarray(crop)
+
+    # If the crop isn't perfectly square (image was smaller than half),
+    # paste it onto a black square canvas to avoid any stretching
+    cw, ch = pil_crop.size
+    if cw != ch:
+        side = max(cw, ch)
+        canvas = Image.new("RGB", (side, side), (0, 0, 0))
+        canvas.paste(pil_crop, ((side - cw) // 2, (side - ch) // 2))
+        pil_crop = canvas
+
+    return pil_crop.resize((target, target), Resampling.LANCZOS)
 
 
 def _generate_timelapse(urls: list) -> tuple[bytes | None, int]:
