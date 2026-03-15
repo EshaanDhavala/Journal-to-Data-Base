@@ -431,7 +431,7 @@ def _detect_face_crop(img_rgb, target: int):
     img_h, img_w = img_rgb.shape[:2]
     gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
 
-    # Try progressively more lenient detection until a face is found
+    # Try front-face cascade with progressively more lenient settings
     faces = []
     for min_neighbors in (5, 3, 2):
         faces = face_cascade.detectMultiScale(
@@ -439,6 +439,18 @@ def _detect_face_crop(img_rgb, target: int):
         )
         if len(faces) > 0:
             break
+
+    # If still nothing, try the profile face cascade (handles tilted/side shots)
+    if len(faces) == 0:
+        profile_cascade = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_profileface.xml"
+        )
+        for min_neighbors in (5, 3, 2):
+            faces = profile_cascade.detectMultiScale(
+                gray, scaleFactor=1.1, minNeighbors=min_neighbors, minSize=(40, 40)
+            )
+            if len(faces) > 0:
+                break
 
     if len(faces) == 0:
         return None
@@ -514,10 +526,16 @@ def _generate_timelapse(urls: list) -> tuple[bytes | None, int]:
             frame = _detect_face_crop(img_np, TARGET)
 
             if frame is None:
-                # Fallback: center the full image on a black canvas
-                img.thumbnail((TARGET, TARGET), Resampling.LANCZOS)
-                frame = Image.new("RGB", (TARGET, TARGET), (0, 0, 0))
-                frame.paste(img, ((TARGET - img.width) // 2, (TARGET - img.height) // 2))
+                # Fallback: square crop biased toward the upper portion of the
+                # image (faces are almost never in the bottom half)
+                iw, ih = img.size
+                side = min(iw, ih)
+                left = (iw - side) // 2
+                # Place the crop window in the top 40% of height
+                top = max(0, int(ih * 0.10))
+                top = min(top, ih - side)
+                img_crop = img.crop((left, top, left + side, top + side))
+                frame = img_crop.resize((TARGET, TARGET), Resampling.LANCZOS)
 
             frames.append(frame)
         except Exception:
