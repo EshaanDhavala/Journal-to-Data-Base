@@ -51,6 +51,7 @@ NUTRITION ACCURACY: Use USDA/standard nutritional data as your reference.
 - Each food item's macros must reflect its specific type and portion size.
 - When a brand is mentioned, use that brand's actual nutrition label values.
 - Be conservative but realistic — do not undercount by more than 10%.
+- This user does not eat beef. At Taco Bell, they always substitute beans for beef in every item.
 
 signals must be a JSON array of objects with keys: key, value, unit, source, confidence (0..1).
 """
@@ -125,6 +126,16 @@ Fruits:
 Beverages:
   whole milk 1cup ≈ 150cal/8g | orange juice 1cup ≈ 110cal/2g
   sports drink 20oz ≈ 130cal/0g | coffee black ≈ 5cal/0g
+
+Candy/Snacks (use exact item size — do NOT inflate protein for small candy items):
+  Reese's peanut butter cup 1 standard (from 2-pack) ≈ 88cal/2g
+  Reese's big cup (1) ≈ 210cal/4g
+  M&Ms 1oz ≈ 140cal/2g | M&Ms fun size bag ≈ 90cal/1g
+  Kit Kat 1 bar (2-finger) ≈ 70cal/1g | Kit Kat king size ≈ 280cal/4g
+  Snickers fun size ≈ 80cal/1g | Snickers full size ≈ 250cal/4g
+  Twix 1 bar (from 2-pack) ≈ 125cal/1g | Twix full size ≈ 250cal/2g
+  Hershey's milk chocolate bar (1.55oz) ≈ 235cal/3g
+  Skittles fun size ≈ 60cal/0g | Starburst 1 piece ≈ 20cal/0g
 
 Restaurants (typical portions):
   burger + fries ≈ 950-1100cal/40-50g | pizza slice cheese ≈ 280cal/12g
@@ -222,10 +233,18 @@ KNOWN_FOODS = [
         "protein": 14,
     },
     {
-        "known_name": "taco_bell_cheesy_gordita_crunch",
+        # Nutrition reflects beans substitution (user never eats beef)
+        "known_name": "taco_bell_cheesy_gordita_crunch_with_beans",
         "patterns": [r"\bcheesy\s+gordita\s+crunch\b"],
-        "cal": 470,
-        "protein": 18,
+        "cal": 430,
+        "protein": 14,
+    },
+    {
+        # Nutrition reflects beans substitution (user never eats beef)
+        "known_name": "taco_bell_doritos_locos_taco_with_beans",
+        "patterns": [r"\bdoritos\s+locos\s+taco\b", r"\bdlt\b"],
+        "cal": 150,
+        "protein": 5,
     },
     {
         "known_name": "taco_bell_spicy_potato_soft_taco",
@@ -238,6 +257,13 @@ KNOWN_FOODS = [
         "patterns": [r"\bcheesy\s+fiesta\s+potatoes\b"],
         "cal": 240,
         "protein": 3,
+    },
+    {
+        # 1 standard Reese's cup (from a 2-pack). For a "big cup" the user should specify.
+        "known_name": "reeses_peanut_butter_cup",
+        "patterns": [r"\breese'?s?\s+peanut\s+butter\s+cup\b", r"\breese'?s?\b"],
+        "cal": 88,
+        "protein": 2,
     },
 ]
 

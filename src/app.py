@@ -558,7 +558,7 @@ with tab_log:
         wb = data.get("water_bottles")
         nc3.metric("Water Bottles", wb if wb is not None else "—")
 
-        # Food breakdown
+        # Food breakdown — editable so you can fix any wrong estimates
         foods = data.get("foods") or []
         if foods:
             rows = []
@@ -566,19 +566,39 @@ with tab_log:
                 if not isinstance(f, dict):
                     continue
                 src = f.get("source", "model_estimate")
+                conf = float(f.get("confidence", 0.7))
                 name = f.get("name", "")
-                if src == "known_food":
-                    name = name + "  ✓"
+                flag = "✓" if src == "known_food" else ("⚠️" if conf < 0.75 else "")
                 rows.append({
+                    "": flag,
                     "Food": name,
                     "Quantity": f.get("quantity_text", ""),
-                    "Calories": f.get("calories", ""),
-                    "Protein (g)": f.get("protein_g", ""),
-                    "Conf.": f"{float(f.get('confidence', 0.7)):.0%}",
+                    "Calories": int(f.get("calories") or 0),
+                    "Protein (g)": int(f.get("protein_g") or 0),
                 })
             if rows:
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-                st.caption("✓ = verified nutrition data from known-food database.")
+                st.markdown("**🍽️ Food Breakdown** — edit any calories or protein that look wrong:")
+                edited_df = st.data_editor(
+                    pd.DataFrame(rows),
+                    use_container_width=True,
+                    hide_index=True,
+                    disabled=["", "Food", "Quantity"],
+                    column_config={
+                        "": st.column_config.TextColumn(width="small"),
+                        "Calories": st.column_config.NumberColumn(min_value=0, step=1),
+                        "Protein (g)": st.column_config.NumberColumn(min_value=0, step=1),
+                    },
+                    key="food_editor",
+                )
+                st.caption("✓ = verified from known-food database.  ⚠️ = low-confidence estimate — double-check these.")
+                # Recompute totals from whatever is in the editor right now
+                edited_cal = int(edited_df["Calories"].sum())
+                edited_pro = int(edited_df["Protein (g)"].sum())
+                data["calories_est"] = edited_cal
+                data["protein_est"] = edited_pro
+                # Update the live metric cards to reflect edits
+                nc1.metric("Calories", edited_cal)
+                nc2.metric("Protein (g)", edited_pro)
 
         # Habits & Mood
         st.markdown("#### 🧠 Habits & Mood")
