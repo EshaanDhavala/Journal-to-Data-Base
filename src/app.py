@@ -219,7 +219,7 @@ def load_sheet_data(_gc, sheet_name: str) -> pd.DataFrame:
     # correctly skips columns that weren't tracked yet.
     df = df.replace("", None)
     if "date" not in df.columns:
-        return df
+        return pd.DataFrame()
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df = df.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
     numeric_cols = [

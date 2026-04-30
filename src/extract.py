@@ -248,13 +248,17 @@ KNOWN_FOODS = [
     },
     {
         "known_name": "taco_bell_spicy_potato_soft_taco",
-        "patterns": [r"\bspicy\s+potato\s+soft\s+taco\b"],
+        "patterns": [r"\bspicy\s+potato\s+soft\s+taco\b", r"\bspicy\s+potato\s+taco\b"],
         "cal": 240,
         "protein": 5,
     },
     {
         "known_name": "taco_bell_cheesy_fiesta_potatoes",
-        "patterns": [r"\bcheesy\s+fiesta\s+potatoes\b"],
+        "patterns": [
+            r"\bcheesy\s+fiesta\s+potatoes\b",
+            r"\bcheesy\s+fiesta\s+potato\b",
+            r"\bfiesta\s+potatoes\b",
+        ],
         "cal": 240,
         "protein": 3,
     },
@@ -339,27 +343,15 @@ def apply_known_overrides(foods: List[Dict[str, Any]], raw: Dict[str, Any]) -> L
     for f in foods:
         known = match_known_food_by_name(f.get("name", ""))
         if known:
-            model_cal = f.get("calories")
-            model_pro = f.get("protein_g")
-
-            # Override if missing or significantly off
-            should_override = (
-                model_cal is None
-                or model_pro is None
-                or abs(int(model_cal) - known["calories"]) >= 80
-                or abs(int(model_pro) - known["protein_g"]) >= 10
-            )
-
-            if should_override:
-                f2 = dict(f)
-                f2["calories"] = int(known["calories"])
-                f2["protein_g"] = int(known["protein_g"])
-                f2["confidence"] = max(float(f.get("confidence", 0.7)), 0.95)
-                f2["source"] = "known_food"
-                f2["matched_known"] = known["known_name"]
-                overridden.append(known["known_name"])
-                final.append(f2)
-                continue
+            f2 = dict(f)
+            f2["calories"] = int(known["calories"])
+            f2["protein_g"] = int(known["protein_g"])
+            f2["confidence"] = max(float(f.get("confidence", 0.7)), 0.95)
+            f2["source"] = "known_food"
+            f2["matched_known"] = known["known_name"]
+            overridden.append(known["known_name"])
+            final.append(f2)
+            continue
 
         f2 = dict(f)
         f2.setdefault("source", "model_estimate")
