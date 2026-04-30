@@ -74,6 +74,7 @@ Top-level fields:
 - mood_1_10 (float 1.0-10.0 or null)
 - weight (float in lbs, e.g., 165.4, or null)
 - summary (short string or null)
+- favorite_moment (string: the best or most memorable part of the day, in the user's own words, or null if not mentioned)
 
 Nutrition fields:
 - foods: an array of food/drink items. Each item:
@@ -144,6 +145,10 @@ Restaurants (typical portions):
   pasta entrée ≈ 650-950cal/25-35g | sushi roll ≈ 300-380cal/12-18g
   sandwich/sub 6" ≈ 400-550cal/25-35g | salad with protein ≈ 400-600cal/30-45g
   stir fry with rice ≈ 500-700cal/25-35g
+
+Taco Bell (this user always substitutes beans for beef):
+  Cheesy Fiesta Potatoes ≈ 240cal/3g | Spicy Potato Soft Taco ≈ 240cal/5g
+  Doritos Locos Taco with beans ≈ 150cal/5g | Cheesy Gordita Crunch with beans ≈ 430cal/14g
 
 PORTION ESTIMATION RULES:
 - "a serving" = standard serving size per package or label

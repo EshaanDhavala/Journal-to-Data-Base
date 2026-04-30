@@ -636,14 +636,36 @@ with tab_log:
                     else:
                         answers_raw[field] = st.text_input(q, value="", key=f"ask_{field}")
 
+        # ── Favorite moment ───────────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("#### ✨ Favorite Moment")
+        st.caption("Optional — what was the best part of your day?")
+        favorite_moment_input = st.text_area(
+            "Favorite moment",
+            value=data.get("favorite_moment") or "",
+            height=80,
+            key="favorite_moment_input",
+            label_visibility="collapsed",
+            placeholder="e.g. had a great conversation with a friend after the gym",
+        )
+
         # ── Daily photo ───────────────────────────────────────────────────
         st.markdown("---")
         st.markdown("#### 📸 Daily Photo")
-        st.caption("Optional — snap a quick selfie to log alongside today's entry.")
+        st.caption("Optional — take a photo or upload one from your camera roll.")
         photo_img = st.camera_input("Take photo", key="daily_photo", label_visibility="collapsed")
         # Persist bytes immediately so they survive the button-click rerun
         if photo_img is not None:
             st.session_state.pending_photo_bytes = photo_img.getvalue()
+        st.markdown("##### Or upload from camera roll")
+        uploaded_photo = st.file_uploader(
+            "Choose photo",
+            type=["jpg", "jpeg", "png", "heic"],
+            key="camera_roll_upload",
+            label_visibility="collapsed",
+        )
+        if uploaded_photo is not None:
+            st.session_state.pending_photo_bytes = uploaded_photo.getvalue()
         if st.session_state.pending_photo_bytes:
             st.caption("Photo ready to upload with save.")
 
@@ -669,6 +691,9 @@ with tab_log:
 
             data.update(answers)
             data["date"] = st.session_state.pending_date
+            fav = st.session_state.get("favorite_moment_input", "")
+            if fav and fav.strip():
+                data["favorite_moment"] = fav.strip()
 
             try:
                 validated = Extraction.model_validate(data).model_dump()
@@ -683,6 +708,8 @@ with tab_log:
 
             daily_row = dict(validated)
             daily_row["full_entry"] = st.session_state.pending_entry or ""
+
+            ensure_column(daily_ws, "favorite_moment")
 
             # Upload photo if one was taken
             captured_bytes = st.session_state.get("pending_photo_bytes")

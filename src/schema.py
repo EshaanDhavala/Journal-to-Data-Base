@@ -54,6 +54,7 @@ class Extraction(BaseModel):
 
     # Mood
     mood_1_10: Optional[float] = None
+    favorite_moment: Optional[str] = None
 
     # Meta
     signals: List[Signal] = Field(default_factory=list)
