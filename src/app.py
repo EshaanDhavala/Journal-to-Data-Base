@@ -386,6 +386,21 @@ def _build_metrics_context(df: pd.DataFrame, max_rows: int = 90) -> str:
     return sub.to_csv(index=False)
 
 
+def _build_journals_context(df: pd.DataFrame, max_rows: int = 60, max_chars: int = 600) -> str:
+    """Build a text log of raw journal entries for GPT — used for activity/event searches."""
+    if "full_entry" not in df.columns:
+        return ""
+    parts = []
+    for _, row in df.sort_values("date", ascending=False).head(max_rows).iterrows():
+        entry = row.get("full_entry")
+        if not entry or pd.isna(entry):
+            continue
+        date_str = row["date"].strftime("%Y-%m-%d") if hasattr(row["date"], "strftime") else str(row["date"])
+        text = str(entry).strip()[:max_chars]
+        parts.append(f"=== {date_str} ===\n{text}")
+    return "\n\n".join(parts)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Photo upload helper (Cloudinary)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -460,11 +475,13 @@ def _generate_timelapse(urls: list) -> tuple[bytes | None, int]:
 # ─────────────────────────────────────────────────────────────────────────────
 # Session state
 # ─────────────────────────────────────────────────────────────────────────────
-for _k in ("pending_data", "pending_entry", "pending_date", "weekly_review_text", "nl_answers", "timelapse_gif", "photo_upload_error", "pending_photo_bytes"):
+for _k in ("pending_data", "pending_entry", "pending_date", "weekly_review_text", "nl_answers", "timelapse_gif", "photo_upload_error", "pending_photo_bytes", "pending_day_images_bytes"):
     if _k not in st.session_state:
         st.session_state[_k] = None
 if st.session_state.nl_answers is None:
     st.session_state.nl_answers = []
+if st.session_state.pending_day_images_bytes is None:
+    st.session_state.pending_day_images_bytes = []
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Tabs
@@ -513,6 +530,7 @@ with tab_log:
     if reset_clicked:
         for _k in ("pending_data", "pending_entry", "pending_date", "pending_photo_bytes", "photo_upload_error"):
             st.session_state[_k] = None
+        st.session_state.pending_day_images_bytes = []
         st.rerun()
 
     # Show any persistent photo upload error (survives the post-save rerun)
@@ -669,6 +687,23 @@ with tab_log:
         if st.session_state.pending_photo_bytes:
             st.caption("Photo ready to upload with save.")
 
+        # ── Day Images ────────────────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("#### 🖼️ Day Images")
+        st.caption("Optional — upload any extra photos from your day (separate from your daily selfie).")
+        day_imgs_uploaded = st.file_uploader(
+            "Upload day images",
+            type=["jpg", "jpeg", "png", "heic", "webp"],
+            accept_multiple_files=True,
+            key="day_images_upload",
+            label_visibility="collapsed",
+        )
+        if day_imgs_uploaded:
+            st.session_state.pending_day_images_bytes = [f.getvalue() for f in day_imgs_uploaded]
+        if st.session_state.pending_day_images_bytes:
+            n_imgs = len(st.session_state.pending_day_images_bytes)
+            st.caption(f"{n_imgs} image{'s' if n_imgs != 1 else ''} ready to upload with save.")
+
         # ── Save ─────────────────────────────────────────────────────────
         st.markdown("---")
         if st.button("💾  Confirm & Save", type="primary", use_container_width=True):
@@ -734,6 +769,26 @@ with tab_log:
                             f"```\n{traceback.format_exc()}\n```"
                         )
 
+            # Upload day images if any were attached
+            day_img_bytes_list = st.session_state.get("pending_day_images_bytes") or []
+            if day_img_bytes_list:
+                if not _cloudinary_cloud_name:
+                    st.session_state.photo_upload_error = (
+                        "**Day image upload skipped** — add Cloudinary secrets to your Streamlit secrets."
+                    )
+                else:
+                    day_urls = []
+                    for idx, img_bytes in enumerate(day_img_bytes_list):
+                        try:
+                            url = _upload_photo(img_bytes, _cloudinary_cloud_name, _cloudinary_api_key, _cloudinary_api_secret)
+                            day_urls.append(url)
+                        except Exception:
+                            pass
+                    if day_urls:
+                        ensure_column(daily_ws, "day_images")
+                        daily_row["day_images"] = json.dumps(day_urls)
+                        st.toast(f"{len(day_urls)} day image{'s' if len(day_urls) != 1 else ''} uploaded!", icon="🖼️")
+
             upsert_daily_row(daily_ws, daily_row)
             append_signals(signals_ws, validated["date"], validated.get("signals", []))
 
@@ -741,6 +796,7 @@ with tab_log:
             st.success("✅ Saved to Google Sheets!")
             for _k in ("pending_data", "pending_entry", "pending_date", "pending_photo_bytes"):
                 st.session_state[_k] = None
+            st.session_state.pending_day_images_bytes = []
             st.rerun()
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1160,6 +1216,10 @@ with tab_ask:
     if df_ask_all.empty:
         st.info("No data yet. Log some entries first.")
     else:
+        st.caption(
+            "Ask anything — counts, trends, or cross-references like "
+            "\"how many times did I golf and get Taco Bell on the same day?\""
+        )
         question = st.text_input(
             "Your question",
             placeholder="How many times did I get Taco Bell this month?",
@@ -1170,18 +1230,31 @@ with tab_ask:
         if ask_btn and question.strip():
             metrics_ctx = _build_metrics_context(df_ask_all)
             foods_ctx = _parse_foods_for_context(df_ask_all)
+            journals_ctx = _build_journals_context(df_ask_all)
             today_str = datetime.date.today().strftime("%B %d, %Y")
 
             system_msg = (
-                f"You are a data analyst answering questions about someone's personal health journal. "
-                f"Today is {today_str}. "
-                "Answer precisely and concisely. Give counts or numbers whenever possible. "
-                "If something isn't in the data, say so clearly. Do not make up information."
+                f"You are a data analyst with access to someone's full personal health journal. "
+                f"Today is {today_str}.\n\n"
+                "You have THREE data sources:\n"
+                "1. METRICS CSV — structured columns (gym, workout_type, calories, sleep, mood, etc.) one row per day.\n"
+                "2. FOODS LOG — every named food item logged per day.\n"
+                "3. JOURNAL ENTRIES — the raw daily journal text the person wrote.\n\n"
+                "Strategy for answering:\n"
+                "- For counts of specific foods/restaurants, search the FOODS LOG and JOURNAL ENTRIES for mentions.\n"
+                "- For activity mentions (e.g. golf, hiking, gaming), search JOURNAL ENTRIES for keywords.\n"
+                "- For cross-day queries (e.g. \"days when I did X AND Y\"), identify matching dates in each source, "
+                "then find the intersection.\n"
+                "- For numeric trends (sleep, weight, mood), use the METRICS CSV.\n"
+                "- Always give a specific count or number when the question asks for one.\n"
+                "- If a food or activity never appears in any source, say so clearly.\n"
+                "- Do not make up or infer information not present in the data."
             )
             user_msg = (
-                f"Here is my health data (CSV, most recent first):\n\n{metrics_ctx}\n\n"
-                f"Here is a log of every food I ate, by date:\n\n{foods_ctx}\n\n"
-                f"My question: {question.strip()}"
+                f"METRICS CSV (last 90 days, most recent first):\n{metrics_ctx}\n\n"
+                f"FOODS LOG (by date, most recent first):\n{foods_ctx or '(no foods logged)'}\n\n"
+                f"JOURNAL ENTRIES (raw text, most recent first):\n{journals_ctx or '(no journal entries available)'}\n\n"
+                f"Question: {question.strip()}"
             )
 
             with st.spinner("Thinking..."):
@@ -1195,10 +1268,9 @@ with tab_ask:
                         ],
                     )
                     answer = resp.choices[0].message.content
-                    # Prepend to history (newest first)
                     st.session_state.nl_answers = [
                         {"q": question.strip(), "a": answer}
-                    ] + st.session_state.nl_answers[:4]
+                    ] + st.session_state.nl_answers[:9]
                 except Exception as e:
                     st.error(f"GPT error: {e}")
 
@@ -1214,11 +1286,15 @@ with tab_ask:
                 )
                 st.markdown(qa["a"])
                 st.markdown("")
+            if st.button("Clear history", key="nl_clear_btn"):
+                st.session_state.nl_answers = []
+                st.rerun()
 
         # Transparency expander
-        if not df_ask_all.empty:
-            with st.expander("🔍 Data context sent to GPT"):
-                st.caption("Metrics (last 90 days):")
-                st.code(_build_metrics_context(df_ask_all), language="")
-                st.caption("Foods log:")
-                st.code(_parse_foods_for_context(df_ask_all) or "(none)", language="")
+        with st.expander("🔍 Data context sent to GPT"):
+            st.caption("Metrics CSV (last 90 days):")
+            st.code(_build_metrics_context(df_ask_all), language="")
+            st.caption("Foods log:")
+            st.code(_parse_foods_for_context(df_ask_all) or "(none)", language="")
+            st.caption("Journal entries (last 60, first 600 chars each):")
+            st.code(_build_journals_context(df_ask_all) or "(none)", language="")
