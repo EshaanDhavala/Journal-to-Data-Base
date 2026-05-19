@@ -149,6 +149,7 @@ Restaurants (typical portions):
 Taco Bell (this user always substitutes beans for beef):
   Cheesy Fiesta Potatoes ≈ 240cal/3g | Spicy Potato Soft Taco ≈ 240cal/5g
   Doritos Locos Taco with beans ≈ 150cal/5g | Cheesy Gordita Crunch with beans ≈ 430cal/14g
+  Chips and Cheese ≈ 220cal/3g | Chalupa with beans ≈ 340cal/6g
 
 PORTION ESTIMATION RULES:
 - "a serving" = standard serving size per package or label
@@ -266,6 +267,19 @@ KNOWN_FOODS = [
         ],
         "cal": 240,
         "protein": 3,
+    },
+    {
+        "known_name": "taco_bell_chips_and_cheese",
+        "patterns": [r"\bchips\s+and\s+cheese\b", r"\bchips\s*&\s*cheese\b"],
+        "cal": 220,
+        "protein": 3,
+    },
+    {
+        # User never eats beef — always beans substitution
+        "known_name": "taco_bell_chalupa_with_beans",
+        "patterns": [r"\bchalupa\b"],
+        "cal": 340,
+        "protein": 6,
     },
     {
         # 1 standard Reese's cup (from a 2-pack). For a "big cup" the user should specify.
