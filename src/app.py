@@ -134,6 +134,8 @@ def parse_bool(s: str):
 
 def parse_value(field: str, raw: str):
     raw = str(raw).strip()
+    if raw.lower() in ("n/a", "na", "n.a."):
+        return None
     ftype = FIELD_TYPES.get(field, "str")
 
     if ftype == "bool":
@@ -650,7 +652,7 @@ with tab_log:
                 col = m1 if i < mid else m2
                 with col:
                     if ftype == "bool":
-                        answers_raw[field] = st.selectbox(q, ["", "yes", "no"], key=f"ask_{field}")
+                        answers_raw[field] = st.selectbox(q, ["", "yes", "no", "n/a"], key=f"ask_{field}")
                     else:
                         answers_raw[field] = st.text_input(q, value="", key=f"ask_{field}")
 
