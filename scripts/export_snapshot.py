@@ -21,7 +21,8 @@ from dotenv import load_dotenv
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from sheets import get_client  # noqa: E402
 
-METRICS = ["sleep_hours", "sleep_quality_1_10", "mood_1_10", "workout_minutes", "screen_time_hours"]
+# Only metrics approved for publishing: sleep, mood, training.
+METRICS = ["sleep_hours", "sleep_quality_1_10", "mood_1_10", "workout_minutes"]
 
 
 def load_daily() -> pd.DataFrame:
@@ -52,6 +53,25 @@ def half_change(df: pd.DataFrame, col: str, agg: str = "mean"):
     return {"first_half": round(float(first), 2), "second_half": round(float(second), 2)}
 
 
+def build_insights(df: pd.DataFrame) -> dict:
+    """Aggregate-only patterns: day-of-week averages, training split, and a few correlations."""
+    order = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    d = df.assign(dow=df["date"].dt.day_name().str[:3])
+    by_dow = d.groupby("dow").agg(mood=("mood_1_10", "mean"), sleep=("sleep_hours", "mean"), gym_rate=("gym", "mean"), days=("date", "size")).reindex(order).round(2)
+    split = {}
+    if "workout_type" in d:
+        wt = d.loc[d["gym"], "workout_type"].fillna("").str.strip().str.lower()
+        split = {k: int((wt == k).sum()) for k in ["push", "pull", "legs"]}
+        split["other"] = int(len(wt) - sum(split.values()))
+    sleep_mood = d["sleep_hours"].corr(d["mood_1_10"])
+    return {
+        "by_dow": [{"dow": k, **{c: (None if pd.isna(v) else float(v)) for c, v in row.items()}} for k, row in by_dow.iterrows()],
+        "gym_split": split,
+        "mood_gym_vs_rest": {"gym": round(float(d.loc[d["gym"], "mood_1_10"].mean()), 2), "rest": round(float(d.loc[~d["gym"], "mood_1_10"].mean()), 2)},
+        "corr_sleep_mood": round(float(sleep_mood), 2),
+    }
+
+
 def build_snapshot(df: pd.DataFrame) -> dict:
     weekly = (
         df.set_index("date")
@@ -75,11 +95,11 @@ def build_snapshot(df: pd.DataFrame) -> dict:
         },
         "halves": {
             "gym_rate": half_change(df, "gym"),
-            "screen_time_hours": half_change(df, "screen_time_hours") if "screen_time_hours" in df else None,
             "sleep_hours": half_change(df, "sleep_hours") if "sleep_hours" in df else None,
             "mood_1_10": half_change(df, "mood_1_10") if "mood_1_10" in df else None,
         },
         "weeks": weeks,
+        "insights": build_insights(df),
     }
 
 
